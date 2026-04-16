@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --c-bg:       #0a0e14;
+    --c-s1:       #0f1520;
+    --c-s2:       #151d2e;
+    --c-s3:       #1a2438;
+    --c-s4:       #1f2c42;
+    --c-text:     #e2e8f0;
+    --c-text2:    #94a3b8;
+    --c-text3:    #64748b;
+    --c-border:   rgba(255,255,255,0.08);
+    --c-border2:  rgba(255,255,255,0.14);
+    --c-blue:     #3b82f6;
+    --c-cyan:     #06b6d4;
+    --c-green:    #10b981;
+    --c-amber:    #f59e0b;
+    --c-red:      #ef4444;
+    --c-purple:   #8b5cf6;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--c-bg);
+    color: var(--c-text);
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+  /* Input base */
+  input, select, textarea {
+    background: var(--c-s3);
+    border: 1px solid var(--c-border);
+    color: var(--c-text);
+    border-radius: 4px;
+    font-size: 13px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--c-blue);
+    box-shadow: 0 0 0 2px rgba(59,130,246,0.2);
+  }
+  input::placeholder { color: var(--c-text3); }
+}
+
+@layer components {
+  /* Card */
+  .card {
+    @apply bg-surface-2 border border-border-subtle rounded-lg;
+  }
+
+  /* Field group */
+  .field {
+    @apply flex flex-col gap-1;
+  }
+  .field label {
+    @apply text-2xs font-medium tracking-wide uppercase text-slate-400;
+  }
+  .field input, .field select {
+    @apply h-8 px-3;
+  }
+
+  /* Button variants */
+  .btn {
+    @apply inline-flex items-center gap-1.5 px-3 h-8 rounded text-xs font-medium
+           border transition-all duration-150 select-none cursor-pointer;
+  }
+  .btn-primary {
+    @apply btn bg-blue-600 border-blue-500 text-white hover:bg-blue-500;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent border-border-subtle text-slate-300
+           hover:bg-surface-4 hover:border-border-normal;
+  }
+  .btn-danger {
+    @apply btn bg-red-600/10 border-red-500/30 text-red-400 hover:bg-red-600/20;
+  }
+  .btn-success {
+    @apply btn bg-emerald-600/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-600/20;
+  }
+
+  /* Status badge */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold tracking-wide uppercase;
+  }
+  .badge-pass { @apply badge bg-emerald-500/15 text-emerald-400; }
+  .badge-fail { @apply badge bg-red-500/15 text-red-400; }
+  .badge-warn { @apply badge bg-amber-500/15 text-amber-400; }
+  .badge-info { @apply badge bg-blue-500/15 text-blue-400; }
+  .badge-draft{ @apply badge bg-slate-500/15 text-slate-400; }
+
+  /* Metric display */
+  .metric {
+    @apply flex flex-col gap-0.5;
+  }
+  .metric-label {
+    @apply text-2xs text-slate-500 uppercase tracking-wide;
+  }
+  .metric-value {
+    @apply font-mono text-base font-medium text-slate-100;
+  }
+  .metric-unit {
+    @apply text-xs text-slate-500 ml-1;
+  }
+
+  /* Section divider */
+  .section-title {
+    @apply text-2xs font-semibold tracking-widest uppercase text-slate-500
+           pb-2 mb-3 border-b border-border-subtle;
+  }
+
+  /* Table */
+  .data-table {
+    @apply w-full text-xs;
+  }
+  .data-table th {
+    @apply text-2xs font-semibold tracking-wide uppercase text-slate-500
+           text-left py-2 px-3 bg-surface-3 border-b border-border-subtle;
+  }
+  .data-table td {
+    @apply py-2 px-3 border-b border-border-subtle font-mono;
+  }
+  .data-table tr:last-child td { @apply border-b-0; }
+  .data-table tr:hover td { @apply bg-surface-3/50; }
+
+  /* Orifice chip */
+  .orifice-chip {
+    @apply inline-flex items-center justify-center w-8 h-8 rounded
+           font-mono font-bold text-sm bg-blue-500/15 text-blue-300
+           border border-blue-500/25;
+  }
+}
+
+/* Number input arrows hidden */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+input[type=number] { -moz-appearance: textfield; }
