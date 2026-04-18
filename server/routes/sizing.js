@@ -4,8 +4,7 @@ const router = express.Router();
 const PSVApi = require('../engines/psv-engine');
 const { validate } = require('../middleware/validation');
 
-// Use node-fetch for Node.js compatibility
-const fetch = require('node-fetch');
+// Node.js 18+ has global fetch built-in
 
 // ── OpenRouter API Configuration ───────────────────────────────────
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
