@@ -13,6 +13,7 @@ const rateLimit  = require('express-rate-limit');
 
 const sizingRouter   = require('./routes/sizing');
 const projectsRouter = require('./routes/projects');
+const aiChatRouter   = require('./routes/aiChat');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -20,11 +21,11 @@ const isProd = process.env.NODE_ENV === 'production';
 
 // Log environment status
 console.log(`🚀 Starting server in ${isProd ? 'PRODUCTION' : 'DEVELOPMENT'} mode`);
-console.log(`📝 OPENROUTER_API_KEY: ${process.env.OPENROUTER_API_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`🤖 GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? '✅ Set' : '❌ Missing'}`);
 
 // ── Security & middleware ─────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled for simplicity
-app.use(cors({ origin: isProd ? false : 'http://localhost:5173' }));
+app.use(cors({ origin: isProd ? false : ['http://localhost:5000', 'http://localhost:5173'] }));
 app.use(compression());
 app.use(morgan(isProd ? 'combined' : 'dev'));
 app.use(express.json({ limit: '1mb' }));
@@ -40,6 +41,7 @@ app.use('/api/', rateLimit({
 // ── API routes ────────────────────────────────────────────────────
 app.use('/api/size',     sizingRouter);
 app.use('/api/projects', projectsRouter);
+app.use('/api/ai-chat',  aiChatRouter);
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
