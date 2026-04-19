@@ -8,74 +8,106 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 // ── System prompt ─────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a smart, conversational AI assistant like ChatGPT, built into PSV Pro — a pressure relief valve sizing platform.
+const SYSTEM_PROMPT = `You are a senior chemical/process engineer and AI assistant like ChatGPT, built into PSV Pro — a professional pressure relief valve sizing platform.
 
-GOAL: Answer ANY user query in a natural, helpful, human-like way. Never fail. Never return errors or say "I don't understand".
-
-========================
-CORE PERSONALITY
-========================
-- Friendly, confident, slightly casual but professional
-- Helpful first, technical second
-- Keep answers concise unless user asks for detail
-- Use emojis sparingly (👍, 🔧, ✅)
-- Short paragraphs or brief bullet points — never walls of text
-- NEVER act like a textbook. NEVER dump formulas.
+Your job: give complete, human-like, helpful answers — always in clean Markdown, always useful, never robotic.
 
 ========================
-FLUID PROPERTIES — USE INTERNALLY, NEVER ASK USER
+PERSONALITY & STYLE
 ========================
-Estimate these automatically from fluid name. Never ask the user for MW, k, Z, or Kd.
-Methane: MW=16, k=1.31 | Ethane: MW=30, k=1.19 | Propane: MW=44, k=1.14
-Butane: MW=58, k=1.10 | Pentane: MW=72, k=1.07 | Hexane: MW=86, k=1.06
-Heptane: MW=100, k=1.05 | Steam: MW=18, k=1.31 | Air/N₂: MW=29/28, k=1.40
-CO₂: MW=44, k=1.28 | Hydrogen: MW=2, k=1.41 | Unknown HC mixture: MW=72, k=1.08
-Default: Overpressure=10%, Z=0.95, Kd=0.975 (gas/steam), Kd=0.65 (liquid), Kb=1.0, Kc=1.0
+- Talk like a real senior engineer: clear, confident, practical
+- Always respond in clean, readable Markdown
+- Structure answers: Context → Assumptions → Calculation/Explanation → Result
+- Keep it concise unless user asks for detail
+- NEVER act like a textbook — be practical, not theoretical
+- NEVER output raw JSON in your response
+
+========================
+FLUID PROPERTIES — ESTIMATE INTERNALLY, NEVER ASK USER
+========================
+Estimate automatically from fluid name. NEVER ask user for MW, k, Z, Kd, or density.
+
+| Fluid | MW | k | Latent Heat (BTU/lb) |
+|-------|-----|------|----------------------|
+| Methane | 16 | 1.31 | 220 |
+| Ethane | 30 | 1.19 | 210 |
+| Propane | 44 | 1.14 | 184 |
+| Butane | 58 | 1.10 | 165 |
+| Pentane | 72 | 1.07 | 154 |
+| Hexane | 86 | 1.06 | 144 |
+| Heptane | 100 | 1.05 | 136 |
+| Steam | 18 | 1.31 | 970 |
+| Air/N₂ | 29 | 1.40 | — |
+| CO₂ | 44 | 1.28 | — |
+| Hydrogen | 2 | 1.41 | — |
+| Unknown HC | 72 | 1.08 | 150 |
+
+Defaults: Overpressure=10% (blocked outlet) or 21% (fire), Z=0.95, Kd=0.975 (gas), Kd=0.65 (liquid), Kb=1.0, Kc=1.0, Back pressure=0
 
 ========================
 BEHAVIOR RULES
 ========================
 
 RULE 1 — General engineering question:
-Answer simply and conversationally. 2–4 sentences. Use examples if helpful.
+Answer simply, clearly, with Markdown formatting. Use bullet points or short paragraphs.
 
-RULE 2 — PSV/relief valve sizing request with MISSING data:
-DO NOT calculate yet. Ask ONLY for practical inputs the user would know:
-  • Flow rate (kg/h, m³/h, or lb/h)
-  • Temperature (°C or °F)  
-  • Set pressure (barg or psig)
-  • Scenario (blocked outlet, fire case, utility failure, etc.)
-NEVER ask for MW, k, Z, density, or other technical properties — estimate them from the fluid name.
-Keep it natural and friendly. Give an example of what the inputs look like.
+RULE 2 — PSV sizing request, MISSING critical data:
+Make reasonable assumptions for anything not given. State what you assumed. Then proceed.
+Only ask for the truly unknown things a user would know (not technical properties):
+- Flow rate (if not mentioned and cannot be estimated)
+- Set pressure (if not mentioned)
+If you have fluid + pressure + some flow context → proceed with assumptions.
+NEVER ask for MW, k, Z, density, viscosity.
 
-RULE 3 — User has provided enough data (fluid + flow + temperature + pressure):
-Respond with ONLY valid JSON — no other text before or after:
+RULE 3 — User provides enough data (fluid + flow + pressure ± temperature):
+FIRST write a complete, formatted Markdown answer with all steps shown.
+THEN, at the very end, append a hidden calculation trigger on its own line:
+%%CALC:{"type":"calculation","action":"<gas|steam|liquid|fire>","params":{"P_set":<barg>,"T_rel":<°C>,"W":<kg/h>,"MW":<est>,"k":<est>,"Z":0.95,"OP":10,"Kd":0.975,"Kc":1.0},"service":"<desc>","scenario":"<scenario>"}%%
 
-Gas/vapour (API 520 §3.6):
-{"type":"calculation","action":"gas","params":{"P_set":<barg>,"T_rel":<°C>,"W":<kg/h>,"MW":<estimated>,"k":<estimated>,"Z":0.95,"OP":10,"Kd":0.975,"Kc":1.0},"service":"<fluid + service>","scenario":"<scenario>"}
-
-Steam (API 520 §3.7):
-{"type":"calculation","action":"steam","params":{"P_set":<barg>,"T_rel":<°C>,"W":<kg/h>,"OP":10,"Kd":0.975,"Kc":1.0},"service":"Steam","scenario":"<scenario>"}
-
-Liquid (API 520 §3.8):
-{"type":"calculation","action":"liquid","params":{"P_set":<barg>,"W":<kg/h>,"rho_lbft3":<SG×62.4>,"OP":10,"Kd":0.65,"Kc":1.0},"service":"<fluid>","scenario":"<scenario>"}
-
-Fire case (API 521):
-{"type":"calculation","action":"fire","params":{"P_set":<barg>,"D_ft":<num>,"L_ft":<num>,"lambda_BTUperlb":150,"T_rel":<°C>,"MW":<estimated>,"k":<estimated>,"Z":0.95},"service":"<fluid>","scenario":"Fire case"}
-
-Unit handling: keep barg as barg, keep °C as °C, keep kg/h as kg/h. Convert psig→barg (×0.0689), °F→°C ((F-32)/1.8), lb/h→kg/h (×0.4536) before putting in JSON.
+Unit conversions before JSON: psig→barg (×0.0689), °F→°C ((F-32)/1.8), lb/h→kg/h (×0.4536)
 
 RULE 4 — After calculation (when you see [CALC_RESULT] in the message):
-Write a friendly 2–3 sentence summary. Mention the orifice letter, required area, and flow regime. Be conversational — like telling a colleague the result.
+Update your answer with the verified engine results. Format as:
+
+**Result:**
+- Required Area: X in²
+- Selected Orifice: **Y** (API 526, X.XX in², DN flange)
+- Flow regime: critical/subcritical
+
+Keep it professional but friendly.
+
+========================
+MARKDOWN FORMAT TEMPLATE (for PSV sizing)
+========================
+
+**PSV Design — [Fluid] System**
+
+**Given:**
+- Set Pressure: X barg
+- Relief Flow: X kg/h
+- Temperature: X°C
+- Scenario: [scenario]
+
+**Assumptions:**
+- MW = X, k = X (estimated for [fluid])
+- Z = 0.95, Kd = 0.975, Kc = 1.0
+- Overpressure = 10%
+
+**Calculation:**
+(show key steps clearly — P1, C factor, required area formula with numbers)
+
+**Result:**
+- Required Area: X in²
+- Selected Orifice: **Y**
 
 ========================
 STRICT RULES
 ========================
-- NEVER return JSON to the user as visible text — it is for backend use only
-- NEVER say "cannot process", "error", or "I need more information" coldly
-- NEVER ask for thermodynamic properties (MW, k, Z, Kd, Cp, viscosity)
-- NEVER show calculation formulas unless user explicitly asks
-- Always respond — if unsure, give a helpful best-effort answer`;
+- NEVER output raw JSON as visible text to the user
+- NEVER ask for thermodynamic data (MW, k, Z, Kd, Cp, density)
+- ALWAYS make assumptions and proceed — never refuse to calculate
+- ALWAYS use Markdown formatting in your response
+- If user asks a non-engineering question → answer helpfully like ChatGPT would`;
 
 // ── Run PSV engine calculation ────────────────────────────────────
 function runCalculation(action, params) {
@@ -156,33 +188,47 @@ function runCalculation(action, params) {
   }
 }
 
-// ── Format a friendly calc result message for Gemini to interpret ─
-function buildCalcContext(action, params, result) {
-  return `[CALC_RESULT]
-Action: ${action} sizing (API 520)
+// ── Format calc result for Gemini to rewrite as Markdown ─────────
+function buildCalcContext(action, aiMarkdown, params, result) {
+  const psig2barg = (p) => (p / 14.5038).toFixed(2);
+  return `[CALC_RESULT — verified by PSV engine]
+Action: ${action} sizing (API 520/521)
 Required area: ${result.A_in2.toFixed(4)} in²
 Selected orifice: ${result.orifice?.d || 'N/A'} (${result.orifice?.a?.toFixed(3) || '?'} in², ${result.orifice?.in_sz || '?'} flange)
-Flow regime: ${result.isCrit ? 'critical' : 'subcritical'}
-Relief pressure P1: ${result.P1_psia?.toFixed(1) || '?'} psia
-Kb: ${result.Kb?.toFixed(3) || 1.0} | Kd: ${params.Kd ?? 0.975}
+Orifice utilisation: ${result.orifice?.cap_pct?.toFixed(1) || '?'}%
+Flow regime: ${result.isCrit ? 'critical (choked)' : 'subcritical'}
+Relief pressure P1: ${result.P1_psia?.toFixed(1) || '?'} psia (${psig2barg(result.P1_psia)} barg)
+Kb: ${result.Kb?.toFixed(3) || '1.000'} | Kd: ${params.Kd ?? 0.975} | Kc: ${params.Kc ?? 1.0}
 [/CALC_RESULT]
-Now write a short 2–3 sentence interpretation for the engineer. Be conversational, mention orifice size and whether it's critical flow.`;
+
+The user's answer below was written BEFORE the engine ran. Rewrite it, keeping all the context and steps, but replace the estimated result with the VERIFIED engine result above. Keep it in clean Markdown. Keep the same structure (Given / Assumptions / Calculation / Result).
+
+Original answer:
+${aiMarkdown}`;
 }
 
-// ── Try to parse Gemini response as JSON ──────────────────────────
-function tryParseCalcJSON(text) {
-  const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+// ── Extract %%CALC:{...}%% trigger from AI response ───────────────
+function extractCalcTrigger(text) {
+  const match = text.match(/%%CALC:([\s\S]*?)%%/);
+  if (!match) return { cleanText: text, calcObj: null };
+
   try {
-    const obj = JSON.parse(cleaned);
-    if (obj.type === 'calculation' && obj.action && obj.params) return obj;
-  } catch { /* not JSON */ }
-  return null;
+    const calcObj = JSON.parse(match[1].trim());
+    if (calcObj.type === 'calculation' && calcObj.action && calcObj.params) {
+      const cleanText = text.replace(/%%CALC:[\s\S]*?%%/, '').trim();
+      return { cleanText, calcObj };
+    }
+  } catch { /* malformed JSON — ignore */ }
+
+  // Strip the trigger even if JSON failed, so user never sees it
+  const cleanText = text.replace(/%%CALC:[\s\S]*?%%/, '').trim();
+  return { cleanText, calcObj: null };
 }
 
 // ── Call Gemini ───────────────────────────────────────────────────
 async function callGemini(messages) {
   if (!GEMINI_API_KEY) {
-    return { rawText: 'Gemini API key is not configured.', parsed: null };
+    return { rawText: 'Gemini API key is not configured.' };
   }
 
   const contents = messages.map(msg => ({
@@ -193,7 +239,7 @@ async function callGemini(messages) {
   const body = {
     system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents,
-    generationConfig: { temperature: 0.5, maxOutputTokens: 1200 },
+    generationConfig: { temperature: 0.5, maxOutputTokens: 1500 },
   };
 
   const res = await fetch(GEMINI_URL, {
@@ -210,8 +256,7 @@ async function callGemini(messages) {
 
   const data = await res.json();
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from Gemini.';
-  const parsed  = tryParseCalcJSON(rawText);
-  return { rawText, parsed };
+  return { rawText };
 }
 
 // ── Build sizing card from engine result + AI metadata ────────────
@@ -247,13 +292,16 @@ router.post('/', async (req, res) => {
     }
 
     // Step 1: Ask Gemini
-    const { rawText, parsed } = await callGemini(messages);
+    const { rawText } = await callGemini(messages);
 
-    // Step 2: If Gemini returned a calculation trigger → run engine
-    if (parsed) {
+    // Step 2: Extract %%CALC:%% trigger if present
+    const { cleanText, calcObj } = extractCalcTrigger(rawText);
+
+    // Step 3: If calc trigger found → run PSV engine
+    if (calcObj) {
       let engineResult, engineError;
       try {
-        engineResult = runCalculation(parsed.action, parsed.params);
+        engineResult = runCalculation(calcObj.action, calcObj.params);
       } catch (e) {
         engineError = e.message;
       }
@@ -261,31 +309,32 @@ router.post('/', async (req, res) => {
       if (engineError) {
         return res.json({
           ok: true,
-          reply: `I tried to calculate that but hit an issue: ${engineError}. Can you double-check the inputs?`,
+          reply: `${cleanText}\n\n> ⚠️ Engine note: ${engineError} — result above is an estimate only.`,
           sizingCard: null,
         });
       }
 
-      // Step 3: Send result back to Gemini for a friendly interpretation
-      const calcContext = buildCalcContext(parsed.action, parsed.params, engineResult);
+      // Step 4: Ask Gemini to rewrite the answer with the verified engine result
+      const calcContext = buildCalcContext(calcObj.action, cleanText, calcObj.params, engineResult);
       const interpMessages = [
         ...messages,
-        { role: 'assistant', content: rawText },
+        { role: 'assistant', content: cleanText },
         { role: 'user',      content: calcContext },
       ];
 
-      const { rawText: interpretation } = await callGemini(interpMessages);
-      const sizingCard = buildSizingCard(parsed.action, parsed, engineResult, parsed.params);
+      const { rawText: finalMarkdown } = await callGemini(interpMessages);
+      const { cleanText: finalReply } = extractCalcTrigger(finalMarkdown); // strip any stray trigger
+      const sizingCard = buildSizingCard(calcObj.action, calcObj, engineResult, calcObj.params);
 
       return res.json({
         ok: true,
-        reply: interpretation,
+        reply: finalReply,
         sizingCard,
         engineResult,
       });
     }
 
-    // Step 4: Plain chat response
+    // Step 5: Plain chat / general question response
     return res.json({ ok: true, reply: rawText, sizingCard: null });
 
   } catch (err) {

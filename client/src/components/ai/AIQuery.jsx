@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
+import ReactMarkdown from 'react-markdown'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { projects, cases } from '../../utils/api'
 import { useAppStore } from '../../store/appStore'
@@ -363,12 +364,29 @@ function Message({ msg, onSaveSizingCard }) {
         }
       </div>
       <div className={`max-w-[82%] space-y-1 ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
-        <div className={`px-3 py-2 rounded-xl text-sm leading-relaxed whitespace-pre-wrap
+        <div className={`px-3 py-2 rounded-xl text-sm leading-relaxed
           ${isUser
-            ? 'bg-purple-500/15 border border-purple-500/20 text-slate-100 rounded-tr-sm'
+            ? 'bg-purple-500/15 border border-purple-500/20 text-slate-100 rounded-tr-sm whitespace-pre-wrap'
             : 'bg-surface-2 border border-border-subtle text-slate-200 rounded-tl-sm'
           }`}>
-          {msg.content}
+          {isUser
+            ? msg.content
+            : (
+              <div className="prose prose-sm prose-invert max-w-none
+                prose-headings:text-slate-100 prose-headings:font-semibold prose-headings:mt-3 prose-headings:mb-1
+                prose-p:text-slate-200 prose-p:my-1 prose-p:leading-relaxed
+                prose-strong:text-slate-100 prose-strong:font-semibold
+                prose-ul:my-1 prose-ul:pl-4 prose-li:my-0 prose-li:text-slate-200
+                prose-ol:my-1 prose-ol:pl-4
+                prose-code:bg-slate-700/60 prose-code:text-blue-300 prose-code:px-1 prose-code:rounded prose-code:text-xs
+                prose-pre:bg-slate-800 prose-pre:border prose-pre:border-slate-600 prose-pre:rounded-lg prose-pre:p-3
+                prose-blockquote:border-l-blue-500 prose-blockquote:text-slate-300 prose-blockquote:italic
+                prose-table:text-slate-200 prose-th:text-slate-100 prose-td:text-slate-300
+                prose-hr:border-slate-600">
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              </div>
+            )
+          }
         </div>
         {msg.toolResult && <ToolResult toolResult={msg.toolResult}/>}
         {msg.sizingCard && (
