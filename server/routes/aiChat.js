@@ -1,206 +1,201 @@
 'use strict';
 
 const express = require('express');
-const router = express.Router();
-const PSVApi = require('../engines/psv-engine');
+const router  = express.Router();
+const PSVApi  = require('../engines/psv-engine');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-// ── Tool: hydraulic power calculation ────────────────────────────
-function calcHydraulicPower({ flow_m3hr, head_m, density_kgm3 = 1000 }) {
-  const power_kW = (flow_m3hr / 3600) * head_m * density_kgm3 * 9.81 / 1000;
-  const power_hp = power_kW * 1.341;
-  return {
-    type: 'hydraulic_power',
-    flow_m3hr,
-    head_m,
-    density_kgm3,
-    power_kW: +power_kW.toFixed(4),
-    power_hp: +power_hp.toFixed(4),
-    formula: 'P = (Q × ρ × g × H) / 1000',
-  };
-}
+// ── System prompt ─────────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are a smart, conversational AI engineering assistant for PSV Pro — a pressure relief valve sizing tool. You help process engineers size PSVs per API 520, 521, and 2000.
 
-// ── Extract numbers from text ─────────────────────────────────────
-function extractNumbers(text) {
-  const nums = [];
-  for (const m of text.matchAll(/(\d+(?:\.\d+)?)/g)) nums.push(+m[1]);
-  return nums;
-}
+## Personality
+- Short, direct, conversational — like a senior engineer on a call
+- Never dump formulas or textbook paragraphs unless explicitly asked
+- Guide the user step by step, one question at a time
+- Think, then answer — don't over-explain
 
-// ── Simple keyword-based tool detection ──────────────────────────
-function detectTool(query) {
-  const q = query.toLowerCase();
+---
 
-  if (/hydraulic\s*power|pump\s*power|fluid\s*power/.test(q) ||
-      (/power/i.test(q) && /flow/i.test(q) && /head/i.test(q))) {
+## Fluid Quick Reference (use internally, don't list to user)
+Methane: MW=16, k=1.31 | Ethane: MW=30, k=1.19 | Propane: MW=44, k=1.14
+Butane: MW=58, k=1.10 | Pentane: MW=72, k=1.07 | Hexane: MW=86, k=1.06
+Heptane: MW=100, k=1.05 | Steam: MW=18, k=1.31 | Air/N₂: MW=29, k=1.40
+CO₂: MW=44, k=1.28 | Hydrogen: MW=2, k=1.41
 
-    let flow = null, head = null;
-    const flowM = query.match(/(\d+(?:\.\d+)?)\s*(?:m3\/h|m³\/h)/i);
-    if (flowM) flow = +flowM[1];
-    const headPatterns = [
-      /at\s+(\d+(?:\.\d+)?)\s*m\b/i,
-      /head\s+(\d+(?:\.\d+)?)\s*m\b/i,
-      /(\d+(?:\.\d+)?)\s*m\s+head/i,
-    ];
-    for (const p of headPatterns) {
-      const m = query.match(p);
-      if (m) { head = +m[1]; break; }
+Default assumptions (unless user specifies): Overpressure=10%, Z=0.95, Kd=0.975 (gas), Kd=0.65 (liquid), Kb=1.0, Kc=1.0
+
+---
+
+## BEHAVIOR RULES
+
+### Rule 1 — General question (no calculation needed)
+Respond with plain, short text. 2–4 sentences max.
+
+### Rule 2 — PSV sizing request with INCOMPLETE data
+Identify what's missing. Ask for only the most critical missing piece(s) in a natural, friendly way.
+For gas/vapour sizing you need: fluid, flow rate (kg/h or lb/h), relief temperature (°C or °F), set pressure (barg or psig), and scenario.
+For liquid: fluid, flow rate, set pressure, density or SG.
+For steam: flow rate, set pressure, superheat temperature.
+For fire case: vessel geometry (D, L), liquid type, set pressure.
+DO NOT calculate until you have enough data.
+
+### Rule 3 — Enough data provided → trigger calculation
+When the user has given you enough information to calculate, respond with ONLY valid JSON, no other text:
+
+For gas/vapour (API 520 §3.6):
+{"type":"calculation","action":"gas","params":{"P_set":<barg>,"T_rel":<C>,"W":<kg/h>,"MW":<num>,"k":<num>,"Z":<num>,"OP":10,"Kd":0.975,"Kc":1.0},"service":"<description>","scenario":"<scenario>"}
+
+For steam (API 520 §3.7):
+{"type":"calculation","action":"steam","params":{"P_set":<barg>,"T_rel":<C>,"W":<kg/h>,"OP":10,"Kd":0.975,"Kc":1.0},"service":"<description>","scenario":"<scenario>"}
+
+For liquid (API 520 §3.8):
+{"type":"calculation","action":"liquid","params":{"P_set":<barg>,"W":<kg/h>,"rho_lbft3":<density>,"OP":10,"Kd":0.65,"Kc":1.0},"service":"<description>","scenario":"<scenario>"}
+
+For fire case (API 521):
+{"type":"calculation","action":"fire","params":{"P_set":<barg>,"D_ft":<num>,"L_ft":<num>,"lambda_BTUperlb":<latent heat>,"T_rel":<C>,"MW":<num>,"k":<num>,"Z":<num>},"service":"<description>","scenario":"Fire case"}
+
+UNIT CONVERSIONS (always convert to these units before putting in JSON):
+- Pressure: convert barg to barg (keep as-is), psig → barg = psig × 0.0689476
+- Temperature: °C to °C (keep), °F → °C = (F-32)/1.8
+- Flow: kg/h to kg/h (keep), lb/h → kg/h = lb/h × 0.453592
+
+### Rule 4 — After calculation (server will send result back)
+When you see [CALC_RESULT] in the message, write a short 2–3 sentence interpretation of the result. Mention the required area, orifice size, and whether it's critical or subcritical flow. Keep it conversational.
+
+---
+
+## RESPONSE FORMAT RULES
+- General chat: plain text only, no markdown headers, keep it short
+- Calculation trigger: ONLY the JSON, nothing else
+- Post-calculation: 2–3 sentences, plain text
+- NEVER use bullet points or numbered lists for simple answers
+- NEVER show formulas unless user asks "show me the formula" or "how is this calculated"`;
+
+// ── Run PSV engine calculation ────────────────────────────────────
+function runCalculation(action, params) {
+  // Convert units: barg → psi gauge (engine uses psig internally via P_set in barg)
+  // The engine accepts P_set in barg for most routes — verify with engine signature
+  // Engine actually works with psig for P_set — convert barg to psig
+  const barg2psig = (b) => b * 14.5038;
+  const kgh2lbh   = (k) => k * 2.20462;
+  const C2F       = (c) => c * 9/5 + 32;
+
+  switch (action) {
+    case 'gas': {
+      const p = {
+        P_set:        barg2psig(params.P_set),
+        OP:           params.OP    ?? 10,
+        P_back_total: params.P_back_total ?? 0,
+        T_rel:        C2F(params.T_rel),
+        W:            kgh2lbh(params.W),
+        MW:           params.MW,
+        k:            params.k,
+        Z:            params.Z    ?? 0.95,
+        Kd:           params.Kd   ?? 0.975,
+        valve_type:   params.valve_type ?? 'conventional',
+        Kc:           params.Kc   ?? 1.0,
+        inlet_dP:     params.inlet_dP ?? 0,
+      };
+      const result = PSVApi.sizeGas(p);
+      return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
     }
-    if (flow === null || head === null) {
-      const nums = extractNumbers(query);
-      if (flow === null && nums.length >= 1) flow = nums[0];
-      if (head === null && nums.length >= 2) head = nums[1];
+    case 'steam': {
+      const p = {
+        P_set:        barg2psig(params.P_set),
+        OP:           params.OP    ?? 10,
+        P_back_total: params.P_back_total ?? 0,
+        T_rel:        C2F(params.T_rel),
+        W:            kgh2lbh(params.W),
+        Kd:           params.Kd   ?? 0.975,
+        valve_type:   params.valve_type ?? 'conventional',
+        Kc:           params.Kc   ?? 1.0,
+      };
+      const result = PSVApi.sizeSteam(p);
+      return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
     }
-    if (flow !== null && head !== null) {
-      return { tool: 'hydraulic_power', params: { flow_m3hr: flow, head_m: head } };
+    case 'liquid': {
+      const p = {
+        P_set:        barg2psig(params.P_set),
+        OP:           params.OP    ?? 10,
+        P_back_total: params.P_back_total ?? 0,
+        W:            kgh2lbh(params.W),
+        rho_lbft3:    params.rho_lbft3 ?? (params.SG ? params.SG * 62.4 : 43.7),
+        visc_cp:      params.visc_cp ?? 1.0,
+        Kd:           params.Kd   ?? 0.65,
+        valve_type:   params.valve_type ?? 'conventional',
+        Kc:           params.Kc   ?? 1.0,
+      };
+      const result = PSVApi.sizeLiquid(p);
+      return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
     }
+    case 'fire': {
+      const p = {
+        P_set:           barg2psig(params.P_set),
+        D_ft:            params.D_ft,
+        L_ft:            params.L_ft,
+        liquid_level_pct: params.liquid_level_pct ?? 60,
+        orientation:     params.orientation ?? 'vertical',
+        F_factor:        params.F_factor ?? 1.0,
+        lambda_BTUperlb: params.lambda_BTUperlb ?? 150,
+        T_rel:           C2F(params.T_rel ?? 250),
+        MW:              params.MW ?? 44,
+        k:               params.k  ?? 1.14,
+        Z:               params.Z  ?? 0.95,
+      };
+      const result = PSVApi.sizeFireCase(p);
+      return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
+    }
+    default:
+      throw new Error(`Unknown calculation action: ${action}`);
   }
-  return null;
 }
 
-// ── Parse [SIZING_CARD] block from AI response ────────────────────
-function extractSizingCard(text) {
-  const match = text.match(/\[SIZING_CARD\]([\s\S]*?)\[\/SIZING_CARD\]/);
-  if (!match) return { cleanText: text, sizingCard: null };
+// ── Format a friendly calc result message for Gemini to interpret ─
+function buildCalcContext(action, params, result) {
+  return `[CALC_RESULT]
+Action: ${action} sizing (API 520)
+Required area: ${result.A_in2.toFixed(4)} in²
+Selected orifice: ${result.orifice?.d || 'N/A'} (${result.orifice?.a?.toFixed(3) || '?'} in², ${result.orifice?.in_sz || '?'} flange)
+Flow regime: ${result.isCrit ? 'critical' : 'subcritical'}
+Relief pressure P1: ${result.P1_psia?.toFixed(1) || '?'} psia
+Kb: ${result.Kb?.toFixed(3) || 1.0} | Kd: ${params.Kd ?? 0.975}
+[/CALC_RESULT]
+Now write a short 2–3 sentence interpretation for the engineer. Be conversational, mention orifice size and whether it's critical flow.`;
+}
 
+// ── Try to parse Gemini response as JSON ──────────────────────────
+function tryParseCalcJSON(text) {
+  const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
   try {
-    const sizingCard = JSON.parse(match[1].trim());
-    const cleanText = text.replace(/\[SIZING_CARD\][\s\S]*?\[\/SIZING_CARD\]/, '').trim();
-    return { cleanText, sizingCard };
-  } catch {
-    const cleanText = text.replace(/\[SIZING_CARD\][\s\S]*?\[\/SIZING_CARD\]/, '').trim();
-    return { cleanText, sizingCard: null };
-  }
+    const obj = JSON.parse(cleaned);
+    if (obj.type === 'calculation' && obj.action && obj.params) return obj;
+  } catch { /* not JSON */ }
+  return null;
 }
 
 // ── Call Gemini ───────────────────────────────────────────────────
 async function callGemini(messages) {
   if (!GEMINI_API_KEY) {
-    return 'Gemini API key is not configured. Please add GEMINI_API_KEY to your environment.';
+    return { rawText: 'Gemini API key is not configured.', parsed: null };
   }
-
-  const systemInstruction = `You are a senior process/chemical engineer with 20+ years of experience in pressure relief systems. You work inside PSV Pro — a professional platform for Pressure Safety Valve (PSV) and Pressure Relief Valve (PRV) sizing per API 520, 521, and 2000.
-
-## Your Personality & Approach
-
-You think and respond like an experienced engineer, NOT a chatbot or form-filling system.
-
-**ALWAYS DO:**
-- Give useful, partial answers immediately — even with incomplete information
-- State your assumptions clearly and proceed with calculations
-- Show the relevant formula before plugging in numbers
-- Use reasonable engineering defaults when values are not provided
-- Guide the user step-by-step toward a complete answer
-- Estimate fluid properties from context (e.g. "hexane → MW ≈ 86, k ≈ 1.06")
-- End with a focused ask for only the 1–2 most critical missing inputs
-
-**NEVER DO:**
-- Say "I need all inputs before I can help"
-- Ask more than 2 questions at once
-- Refuse to proceed due to missing data
-- Give vague answers when an engineering estimate is possible
-
----
-
-## Default Assumptions (use when not stated)
-
-| Parameter | Default |
-|-----------|---------|
-| Overpressure | 10% (API 520) |
-| Back pressure | 0 psig (conventional valve) |
-| Kd (gas/steam) | 0.975 |
-| Kd (liquid) | 0.65 |
-| Kb | 1.0 (verify if back pressure > 10%) |
-| Kc | 1.0 (no rupture disk) |
-| Z (compressibility) | 0.9–1.0 (assume 0.95 for hydrocarbons) |
-| k (Cp/Cv) | 1.05 for heavy HCs, 1.4 for air/N₂, 1.3 for steam |
-
----
-
-## Common Fluid Properties (estimate from context)
-
-| Fluid | MW | k | Notes |
-|-------|----|---|-------|
-| Methane (C1) | 16 | 1.31 | |
-| Ethane (C2) | 30 | 1.19 | |
-| Propane (C3) | 44 | 1.14 | |
-| Butane (C4) | 58 | 1.10 | |
-| Hexane (C6) | 86 | 1.06 | |
-| Heptane (C7) | 100 | 1.05 | |
-| Mixture HCs | estimate by mole-avg | ~1.05–1.1 | |
-| Steam | 18 | 1.31 | use Napier eq. |
-| Air / N₂ | 29 / 28 | 1.4 | |
-| CO₂ | 44 | 1.28 | |
-
----
-
-## Response Format
-
-Structure your response like this:
-
-**1. Context** — briefly confirm what you're sizing and what standard applies
-
-**2. Assumptions** — list what you're assuming (MW, k, Z, Kd, etc.)
-
-**3. Formula** — show the relevant API equation
-
-**4. Partial Calculation** — plug in known + assumed values, highlight unknowns as [?]
-
-**5. Result / Next Step** — give a preliminary answer or range if possible
-
-**6. Ask** — ask for only the 1–2 most critical missing values, with an example input
-
----
-
-## SIZING CARD (Important — output when appropriate)
-
-When you have performed a **complete or substantially complete PSV sizing calculation** (meaning you know or can reasonably estimate: set pressure, flow rate, temperature, fluid type, and the required orifice area), you MUST append a structured summary block at the very end of your response.
-
-Output this block ONLY when you have actually computed or estimated A_in2 or at least the key sizing inputs. Do NOT output it for general questions or incomplete scenarios.
-
-Format (append after your normal response):
-
-[SIZING_CARD]
-{
-  "service": "<fluid/service description, e.g. Propane vapor — blocked outlet>",
-  "phase": "<one of: gas, steam, liquid, twophase, fire, thermal, tuberupture, blowdown>",
-  "scenario": "<relief scenario, e.g. Blocked outlet, Fire case, Utility failure>",
-  "set_pressure_barg": <number or null>,
-  "set_pressure_psig": <number or null>,
-  "temp_C": <number or null>,
-  "flow_kgh": <number or null>,
-  "MW": <number or null>,
-  "k": <number or null>,
-  "Z": <number or null>,
-  "A_in2": <calculated required area in in² or null if not yet computed>,
-  "orifice": "<API 526 orifice letter or null>",
-  "assumptions": "<comma-separated list of key assumptions made>",
-  "notes": "<any important engineering notes>"
-}
-[/SIZING_CARD]
-
-Be concise. Do not repeat greetings or re-introduce yourself in follow-up messages. When tool/calculation results are injected, interpret them clearly with appropriate units.`;
 
   const contents = messages.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: msg.content }]
+    parts: [{ text: msg.content }],
   }));
 
   const body = {
-    system_instruction: { parts: [{ text: systemInstruction }] },
+    system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents,
-    generationConfig: {
-      temperature: 0.65,
-      maxOutputTokens: 1800,
-    }
+    generationConfig: { temperature: 0.5, maxOutputTokens: 1200 },
   };
 
   const res = await fetch(GEMINI_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -210,58 +205,84 @@ Be concise. Do not repeat greetings or re-introduce yourself in follow-up messag
   }
 
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from Gemini.';
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from Gemini.';
+  const parsed  = tryParseCalcJSON(rawText);
+  return { rawText, parsed };
+}
+
+// ── Build sizing card from engine result + AI metadata ────────────
+function buildSizingCard(action, aiObj, result, params) {
+  const psig2barg = (p) => p / 14.5038;
+  return {
+    service:           aiObj.service || `${action} sizing`,
+    phase:             action,
+    scenario:          aiObj.scenario || '',
+    set_pressure_barg: +psig2barg(params.P_set).toFixed(2),
+    temp_C:            params.T_rel != null ? +((params.T_rel - 32) * 5/9).toFixed(1) : null,
+    flow_kgh:          params.W     != null ? +(params.W / 2.20462).toFixed(1) : null,
+    MW:                params.MW    ?? null,
+    k:                 params.k     ?? null,
+    Z:                 params.Z     ?? null,
+    A_in2:             +result.A_in2.toFixed(4),
+    orifice:           result.orifice?.d || null,
+    assumptions:       `Overpressure 10%, Kd=${params.Kd}, Kc=${params.Kc}, Z=${params.Z ?? 0.95}`,
+    notes:             result.isCrit ? 'Critical (choked) flow.' : 'Subcritical flow.',
+  };
 }
 
 // ── POST /api/ai-chat ─────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
     const { messages } = req.body;
-
-    if (!Array.isArray(messages) || messages.length === 0) {
+    if (!Array.isArray(messages) || !messages.length) {
       return res.status(400).json({ ok: false, error: 'messages array required' });
     }
-
-    const lastMessage = messages[messages.length - 1];
-    if (!lastMessage || lastMessage.role !== 'user') {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'user') {
       return res.status(400).json({ ok: false, error: 'Last message must be from user' });
     }
 
-    const userQuery = lastMessage.content;
+    // Step 1: Ask Gemini
+    const { rawText, parsed } = await callGemini(messages);
 
-    // Detect if a calculation tool should be called
-    const toolCall = detectTool(userQuery);
-
-    if (toolCall) {
-      let toolResult;
-      if (toolCall.tool === 'hydraulic_power') {
-        toolResult = calcHydraulicPower(toolCall.params);
+    // Step 2: If Gemini returned a calculation trigger → run engine
+    if (parsed) {
+      let engineResult, engineError;
+      try {
+        engineResult = runCalculation(parsed.action, parsed.params);
+      } catch (e) {
+        engineError = e.message;
       }
 
-      const augmentedMessages = [
-        ...messages.slice(0, -1),
-        {
-          role: 'user',
-          content: `${userQuery}\n\n[CALCULATION RESULT]\n${JSON.stringify(toolResult, null, 2)}\n\nInterpret the above calculation result clearly and professionally.`
-        }
+      if (engineError) {
+        return res.json({
+          ok: true,
+          reply: `I tried to calculate that but hit an issue: ${engineError}. Can you double-check the inputs?`,
+          sizingCard: null,
+        });
+      }
+
+      // Step 3: Send result back to Gemini for a friendly interpretation
+      const calcContext = buildCalcContext(parsed.action, parsed.params, engineResult);
+      const interpMessages = [
+        ...messages,
+        { role: 'assistant', content: rawText },
+        { role: 'user',      content: calcContext },
       ];
 
-      const rawText = await callGemini(augmentedMessages);
-      const { cleanText, sizingCard } = extractSizingCard(rawText);
+      const { rawText: interpretation } = await callGemini(interpMessages);
+      const sizingCard = buildSizingCard(parsed.action, parsed, engineResult, parsed.params);
 
       return res.json({
         ok: true,
-        reply: cleanText,
-        tool: toolCall.tool,
-        toolResult,
+        reply: interpretation,
         sizingCard,
+        engineResult,
       });
     }
 
-    const rawText = await callGemini(messages);
-    const { cleanText, sizingCard } = extractSizingCard(rawText);
-
-    return res.json({ ok: true, reply: cleanText, sizingCard });
+    // Step 4: Plain chat response
+    return res.json({ ok: true, reply: rawText, sizingCard: null });
 
   } catch (err) {
     console.error('AI chat error:', err.message);
