@@ -5,7 +5,8 @@ const router  = express.Router();
 const PSVApi  = require('../engines/psv-engine');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_MODEL   = 'gemini-2.0-flash';
+const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
 // ── System prompt ─────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a senior chemical/process engineer and AI assistant like ChatGPT, built into PSV Pro — a professional pressure relief valve sizing platform.
@@ -188,23 +189,28 @@ function runCalculation(action, params) {
   }
 }
 
-// ── Format calc result for Gemini to rewrite as Markdown ─────────
-function buildCalcContext(action, aiMarkdown, params, result) {
+// ── Format engine result as a Markdown section (no extra API call) ─
+function buildVerifiedResultSection(action, params, result) {
   const psig2barg = (p) => (p / 14.5038).toFixed(2);
-  return `[CALC_RESULT — verified by PSV engine]
-Action: ${action} sizing (API 520/521)
-Required area: ${result.A_in2.toFixed(4)} in²
-Selected orifice: ${result.orifice?.d || 'N/A'} (${result.orifice?.a?.toFixed(3) || '?'} in², ${result.orifice?.in_sz || '?'} flange)
-Orifice utilisation: ${result.orifice?.cap_pct?.toFixed(1) || '?'}%
-Flow regime: ${result.isCrit ? 'critical (choked)' : 'subcritical'}
-Relief pressure P1: ${result.P1_psia?.toFixed(1) || '?'} psia (${psig2barg(result.P1_psia)} barg)
-Kb: ${result.Kb?.toFixed(3) || '1.000'} | Kd: ${params.Kd ?? 0.975} | Kc: ${params.Kc ?? 1.0}
-[/CALC_RESULT]
+  const orifice   = result.orifice;
+  const flowLabel = result.isCrit ? 'Critical (choked) flow' : 'Subcritical flow';
+  const P1_barg   = result.P1_psia ? psig2barg(result.P1_psia) : '—';
+  return `
 
-The user's answer below was written BEFORE the engine ran. Rewrite it, keeping all the context and steps, but replace the estimated result with the VERIFIED engine result above. Keep it in clean Markdown. Keep the same structure (Given / Assumptions / Calculation / Result).
+---
 
-Original answer:
-${aiMarkdown}`;
+**✅ Verified Result — PSV Engine (API 520/${action === 'fire' ? '521' : '520'})**
+
+| Parameter | Value |
+|-----------|-------|
+| Required Area | **${result.A_in2.toFixed(4)} in²** |
+| Selected Orifice | **${orifice?.d || 'N/A'}** (${orifice?.a?.toFixed(3) || '?'} in², ${orifice?.in_sz || '?'} flange) |
+| Orifice Utilisation | ${orifice?.cap_pct != null ? orifice.cap_pct.toFixed(1) + '%' : '—'} |
+| Relief Pressure P1 | ${result.P1_psia?.toFixed(1) || '—'} psia (${P1_barg} barg) |
+| Flow Regime | ${flowLabel} |
+| Kd / Kc / Kb | ${params.Kd ?? 0.975} / ${params.Kc ?? 1.0} / ${result.Kb?.toFixed(3) ?? '1.000'} |
+
+> This result was calculated by the PSV Pro sizing engine and verified against API 526 orifice selection.`;
 }
 
 // ── Extract %%CALC:{...}%% trigger from AI response ───────────────
@@ -242,21 +248,33 @@ async function callGemini(messages) {
     generationConfig: { temperature: 0.5, maxOutputTokens: 1500 },
   };
 
-  const res = await fetch(GEMINI_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  // Retry up to 2 times on 429 / 503 with exponential backoff
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(attempt * 8000); // 8s, 16s
 
-  if (!res.ok) {
-    const err = await res.text();
-    console.error('Gemini error:', res.status, err);
-    throw new Error(`Gemini API error: ${res.status}`);
+    const res = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from Gemini.';
+      return { rawText };
+    }
+
+    const errText = await res.text();
+    console.error(`Gemini error (attempt ${attempt + 1}):`, res.status, errText);
+    lastErr = new Error(`Gemini API error: ${res.status}`);
+
+    // Only retry on rate-limit or server errors
+    if (res.status !== 429 && res.status !== 503) break;
   }
 
-  const data = await res.json();
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from Gemini.';
-  return { rawText };
+  throw lastErr;
 }
 
 // ── Build sizing card from engine result + AI metadata ────────────
@@ -314,17 +332,10 @@ router.post('/', async (req, res) => {
         });
       }
 
-      // Step 4: Ask Gemini to rewrite the answer with the verified engine result
-      const calcContext = buildCalcContext(calcObj.action, cleanText, calcObj.params, engineResult);
-      const interpMessages = [
-        ...messages,
-        { role: 'assistant', content: cleanText },
-        { role: 'user',      content: calcContext },
-      ];
-
-      const { rawText: finalMarkdown } = await callGemini(interpMessages);
-      const { cleanText: finalReply } = extractCalcTrigger(finalMarkdown); // strip any stray trigger
-      const sizingCard = buildSizingCard(calcObj.action, calcObj, engineResult, calcObj.params);
+      // Step 4: Append verified result section server-side (no extra API call)
+      const verifiedSection = buildVerifiedResultSection(calcObj.action, calcObj.params, engineResult);
+      const finalReply      = cleanText + verifiedSection;
+      const sizingCard      = buildSizingCard(calcObj.action, calcObj, engineResult, calcObj.params);
 
       return res.json({
         ok: true,
