@@ -1,6 +1,5 @@
 'use strict';
 
-// ── Load environment variables FIRST ─────────────────────────────────
 require('dotenv').config();
 
 const express    = require('express');
@@ -15,16 +14,16 @@ const sizingRouter   = require('./routes/sizing');
 const projectsRouter = require('./routes/projects');
 const aiChatRouter   = require('./routes/aiChat');
 
-const app  = express();
-const PORT = process.env.PORT || 3001;
+const app    = express();
+const PORT   = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
 
-// Log environment status
-console.log(`🚀 Starting server in ${isProd ? 'PRODUCTION' : 'DEVELOPMENT'} mode`);
-console.log(`🤖 GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`🚀 PSV Pro v4.0 — ${isProd ? 'production' : 'development'} mode`);
+console.log(`   GEMINI_API_KEY   : ${process.env.GEMINI_API_KEY   ? '✅' : '❌ missing'}`);
+console.log(`   OPENROUTER_KEY   : ${process.env.OPENROUTER_API_KEY ? '✅' : '⚠️  not set (optional)'}`);
 
 // ── Security & middleware ─────────────────────────────────────────
-app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled for simplicity
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: isProd ? false : ['http://localhost:5000', 'http://localhost:5173'] }));
 app.use(compression());
 app.use(morgan(isProd ? 'combined' : 'dev'));
@@ -33,9 +32,9 @@ app.use(express.urlencoded({ extended: false }));
 
 // ── Rate limiting ─────────────────────────────────────────────────
 app.use('/api/', rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 300,
-  message: { ok: false, error: 'Too many requests' }
+  message: { ok: false, error: 'Too many requests' },
 }));
 
 // ── API routes ────────────────────────────────────────────────────
@@ -52,7 +51,7 @@ app.get('/api/health', (req, res) => {
     version: '4.0.0',
     engine: { tests: suite.pass + '/' + suite.total, pass: suite.fail === 0 },
     uptime: process.uptime().toFixed(0) + 's',
-    ai: { configured: !!process.env.OPENROUTER_API_KEY }
+    ai: { configured: !!process.env.GEMINI_API_KEY },
   });
 });
 
@@ -63,22 +62,20 @@ if (isProd) {
   app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
 }
 
-// ── Error handler ─────────────────────────────────────────────────
+// ── Global error handler ──────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('❌ Server error:', err.stack);
-  res.status(500).json({ 
-    ok: false, 
-    error: isProd ? 'Server error' : err.message 
+  console.error('Server error:', err.message);
+  res.status(500).json({
+    ok: false,
+    error: isProd ? 'Internal server error' : err.message,
   });
 });
 
-// ── Start server ───────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✨ PSV Pro API  →  http://localhost:${PORT}/api`);
-  console.log(`🏥 Health       →  http://localhost:${PORT}/api/health`);
-  console.log(`🤖 AI Status    →  ${process.env.OPENROUTER_API_KEY ? '✅ Ready' : '⚠️ No API key (local mode)'}`);
-  if (!isProd) console.log(`💻 Frontend    →  http://localhost:5173  (npm run dev:client)\n`);
+  console.log(`\n   API  →  http://localhost:${PORT}/api`);
+  if (!isProd) console.log(`   UI   →  http://localhost:5000  (Vite dev server)\n`);
 });
 
 module.exports = app;

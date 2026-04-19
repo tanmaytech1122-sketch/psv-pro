@@ -4,311 +4,166 @@ const router = express.Router();
 const PSVApi = require('../engines/psv-engine');
 const { validate } = require('../middleware/validation');
 
-// Node.js 18+ has global fetch built-in
-
 // ── OpenRouter API Configuration ───────────────────────────────────
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = 'anthropic/claude-3.5-sonnet';
 
-// Warn if API key is missing
-if (!OPENROUTER_API_KEY) {
-  console.warn('⚠️ OPENROUTER_API_KEY not set. AI queries will use local parsing only.');
-}
-
-// Simple calculation functions
-const calculationFunctions = {
-  hydraulic_power: (params) => {
-    const { flow_m3hr, head_m } = params;
-    if (!flow_m3hr || !head_m) {
-      return { error: 'Missing required parameters: flow_m3hr (m³/h) and head_m (m)' };
-    }
-    const power_kW = (flow_m3hr / 3600) * head_m * 9.81;
-    return {
-      power_kW: power_kW,
-      power_hp: power_kW * 1.341,
-      formula: "P = (Q × ρ × g × H) / 1000",
-      parameters: { flow_m3hr, head_m }
-    };
-  }
-};
-
-// ── Robust Local Parser (Fixed for multi-digit numbers) ────────────────
+// ── Local parser: extract flow & head from a natural-language query ─
 function parseQueryLocally(query) {
-  console.log('🔍 Local parsing:', query);
-  
-  // Check if this is actually a hydraulic/power query
   const isHydraulicQuery = /hydraulic/i.test(query) ||
     (/power/i.test(query) && /flow/i.test(query) && /head/i.test(query));
-  
-  if (!isHydraulicQuery) {
-    console.log('❌ Not a hydraulic power query');
-    return null;
-  }
-  
-  // Extract ALL numbers including decimals (fixed for multi-digit)
+
+  if (!isHydraulicQuery) return null;
+
   const numbers = [];
-  const numberMatches = query.matchAll(/(\d+(?:\.\d+)?)/g);
-  for (const match of numberMatches) {
-    numbers.push(parseFloat(match[1]));
-  }
-  
-  console.log('📊 Found numbers:', numbers);
-  
-  if (!numbers || numbers.length < 2) {
-    console.log('❌ Need at least 2 numbers');
-    return null;
-  }
-  
-  let flow = null;
-  let head = null;
-  
-  // Method 1: Look for pattern "XXX m3/h" or "XXX m³/h" for flow
-  const flowPattern = /(\d+(?:\.\d+)?)\s*(?:m3\/h|m³\/h|cubic)/i;
-  const flowMatch = query.match(flowPattern);
-  if (flowMatch) {
-    flow = parseFloat(flowMatch[1]);
-    console.log(`✅ Found flow with unit: ${flow} m³/h`);
-  }
-  
-  // Method 2: Look for patterns for head
-  // Pattern: "at XXX m", "head XXX m", "XXX m head"
+  for (const m of query.matchAll(/(\d+(?:\.\d+)?)/g)) numbers.push(parseFloat(m[1]));
+
+  if (numbers.length < 2) return null;
+
+  let flow = null, head = null;
+
+  const flowMatch = query.match(/(\d+(?:\.\d+)?)\s*(?:m3\/h|m³\/h|cubic)/i);
+  if (flowMatch) flow = parseFloat(flowMatch[1]);
+
   const headPatterns = [
     /at\s+(\d+(?:\.\d+)?)\s*m\b/i,
     /head\s+(\d+(?:\.\d+)?)\s*m\b/i,
     /(\d+(?:\.\d+)?)\s*m\s+head/i,
-    /(\d+(?:\.\d+)?)\s*m(?!3|\/h)/i  // m not followed by 3 or /h
+    /(\d+(?:\.\d+)?)\s*m(?!3|\/h)/i,
   ];
-  
-  for (const pattern of headPatterns) {
-    const headMatch = query.match(pattern);
-    if (headMatch) {
-      head = parseFloat(headMatch[1]);
-      console.log(`✅ Found head with pattern: ${head} m`);
-      break;
-    }
+  for (const p of headPatterns) {
+    const m = query.match(p);
+    if (m) { head = parseFloat(m[1]); break; }
   }
-  
-  // Method 3: Fallback - first number is flow, second is head
-  if (flow === null && numbers.length >= 1) {
-    flow = numbers[0];
-    console.log(`⚠️ Using first number as flow: ${flow}`);
-  }
-  
-  if (head === null && numbers.length >= 2) {
-    head = numbers[1];
-    console.log(`⚠️ Using second number as head: ${head}`);
-  }
-  
-  // Method 4: If head still null and we have numbers, try to find reasonable head
-  if (head === null && numbers.length >= 2) {
-    // Head is usually smaller than flow? Not always, but try
-    head = numbers[1];
-    console.log(`⚠️ Using second number as head (fallback): ${head}`);
-  }
-  
-  if (flow === null || head === null || isNaN(flow) || isNaN(head)) {
-    console.log('❌ Could not identify flow and head');
-    return null;
-  }
-  
-  console.log(`✅ Final parsed: flow=${flow} m³/h, head=${head} m`);
-  
+
+  if (flow === null && numbers.length >= 1) flow = numbers[0];
+  if (head === null && numbers.length >= 2) head = numbers[1];
+
+  if (flow === null || head === null || isNaN(flow) || isNaN(head)) return null;
+
   return {
     intent: 'hydraulic_power',
     parameters: { flow_m3hr: flow, head_m: head },
-    confidence: 0.95
+    confidence: 0.95,
   };
 }
 
-// Helper: Call OpenRouter API with Claude (safe parsing)
+// ── Call OpenRouter / Claude to extract parameters ─────────────────
 async function callOpenRouter(userQuery) {
-  if (!OPENROUTER_API_KEY) {
-    console.log('ℹ️ No API key, skipping Claude');
-    return null;
-  }
-  
-  const url = 'https://openrouter.ai/api/v1/chat/completions';
-  
-  const systemPrompt = `Extract flow and head values from this engineering query.
+  if (!OPENROUTER_API_KEY) return null;
+
+  const prompt = `Extract flow and head values from this engineering query.
 Query: "${userQuery}"
-
-Return ONLY valid JSON: {"flow_m3hr": number, "head_m": number}
-
-Examples:
-"power for flow 250 m3/h and head 75 m" -> {"flow_m3hr": 250, "head_m": 75}
-"hydraulic power 800 m3/h at 30 m head" -> {"flow_m3hr": 800, "head_m": 30}
-"calculate hydraulic power for flow 100 m3/h and head 50 m" -> {"flow_m3hr": 100, "head_m": 50}`;
+Return ONLY valid JSON: {"flow_m3hr": number, "head_m": number}`;
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'HTTP-Referer': 'http://localhost:3001',
-        'X-Title': 'PSV Pro API'
+        'X-Title': 'PSV Pro API',
       },
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
         messages: [
-          { role: 'system', content: 'You extract numbers from engineering queries. Return only valid JSON.' },
-          { role: 'user', content: systemPrompt }
+          { role: 'system', content: 'Extract numbers from engineering queries. Return only valid JSON.' },
+          { role: 'user', content: prompt },
         ],
         temperature: 0.1,
-        max_tokens: 100
-      })
+        max_tokens: 100,
+      }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('OpenRouter error:', response.status, errorText);
-      return null;
-    }
+    if (!response.ok) return null;
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    
-    if (!content) {
-      console.error('Empty response from Claude');
-      return null;
-    }
-    
-    // Clean the response
-    let cleanContent = content.trim();
-    cleanContent = cleanContent.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-    
-    console.log('🤖 Claude raw response:', cleanContent);
-    
-    // Safe JSON parsing
-    try {
-      const parsed = JSON.parse(cleanContent);
-      if (parsed.flow_m3hr && parsed.head_m) {
-        console.log(`✅ Claude parsed: flow=${parsed.flow_m3hr}, head=${parsed.head_m}`);
-        return parsed;
-      }
-    } catch (parseError) {
-      console.error('JSON parse failed:', cleanContent);
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Claude API error:', error.message);
+    const content = data.choices?.[0]?.message?.content?.trim()
+      .replace(/```json\n?/g, '').replace(/```\n?/g, '');
+
+    if (!content) return null;
+
+    const parsed = JSON.parse(content);
+    return (parsed.flow_m3hr && parsed.head_m) ? parsed : null;
+  } catch {
     return null;
   }
 }
 
-// ── AI Query Endpoint (Fixed for multi-digit numbers) ─────────────
+// ── POST /api/size/ai-query ───────────────────────────────────────
 router.post('/ai-query', async (req, res) => {
-  console.log('\n🚀 === AI QUERY RECEIVED ===');
-  console.log('📨 Request body:', req.body);
-  
   try {
     const { query } = req.body;
-    
+
     if (!query || typeof query !== 'string') {
-      return res.status(400).json({ 
-        ok: false, 
-        error: 'Missing or invalid "query" field' 
-      });
+      return res.status(400).json({ ok: false, error: 'Missing or invalid "query" field' });
     }
 
-    console.log('💬 Query:', query);
-    
-    // Extract ALL numbers properly (fixed for multi-digit)
     const allNumbers = [];
-    const numberMatches = query.matchAll(/(\d+(?:\.\d+)?)/g);
-    for (const match of numberMatches) {
-      allNumbers.push(parseFloat(match[1]));
-    }
-    console.log('🔢 All numbers found:', allNumbers);
-    
-    // STEP 1: Try local parser FIRST
+    for (const m of query.matchAll(/(\d+(?:\.\d+)?)/g)) allNumbers.push(parseFloat(m[1]));
+
     let intent = parseQueryLocally(query);
-    
-    // STEP 2: If local parser fails, try Claude API
+
     if (!intent && OPENROUTER_API_KEY) {
-      console.log('🔄 Local parser failed, trying Claude API...');
       const apiResult = await callOpenRouter(query);
-      if (apiResult && apiResult.flow_m3hr && apiResult.head_m) {
+      if (apiResult?.flow_m3hr && apiResult?.head_m) {
         intent = {
           intent: 'hydraulic_power',
           parameters: { flow_m3hr: apiResult.flow_m3hr, head_m: apiResult.head_m },
-          confidence: 0.90
+          confidence: 0.90,
         };
-        console.log('✅ Claude API successful');
       }
     }
-    
-    // STEP 3: If still no intent, try direct number extraction as last resort
+
     if (!intent && allNumbers.length >= 2) {
-      console.log('🔄 Using direct number extraction fallback');
       intent = {
         intent: 'hydraulic_power',
         parameters: { flow_m3hr: allNumbers[0], head_m: allNumbers[1] },
-        confidence: 0.80
+        confidence: 0.80,
       };
-      console.log(`✅ Direct extraction: flow=${allNumbers[0]}, head=${allNumbers[1]}`);
     }
-    
-    // STEP 4: If all parsing fails, return helpful error
+
     if (!intent) {
-      console.log('❌ No parser could understand the query');
       return res.status(422).json({
         ok: false,
         error: 'Could not understand query',
-        debug: {
-          received_query: query,
-          numbers_found: allNumbers,
-          local_parser_failed: !parseQueryLocally(query),
-          api_available: !!OPENROUTER_API_KEY
-        },
         suggestion: 'Try: "hydraulic power 800 m3/h at 30 m head"',
         examples: [
           'power for flow 250 m3/h and head 75 m',
           'hydraulic power 500 m3/h at 30 m head',
-          'calculate hydraulic power for flow 100 m3/h and head 50 m'
-        ]
+        ],
       });
     }
-    
-    // STEP 5: Calculate hydraulic power
+
     const { flow_m3hr, head_m } = intent.parameters;
     const power_kW = (flow_m3hr / 3600) * head_m * 9.81;
     const power_hp = power_kW * 1.341;
-    
-    console.log(`📐 Calculation: ${flow_m3hr} m³/h × ${head_m} m = ${power_kW.toFixed(2)} kW`);
-    
-    // STEP 6: Return success response
-    const response = {
+
+    res.json({
       ok: true,
       result: {
-        query: query,
+        query,
         intent: 'hydraulic_power',
         confidence: intent.confidence,
-        parameters_used: { 
-          flow_m3hr: flow_m3hr, 
-          head_m: head_m 
-        },
+        parameters_used: { flow_m3hr, head_m },
         calculation_result: {
-          power_kW: power_kW,
-          power_hp: power_hp,
-          formula: "P = (Q × ρ × g × H) / 1000",
-          flow_m3hr: flow_m3hr,
-          head_m: head_m
+          power_kW,
+          power_hp,
+          formula: 'P = (Q × ρ × g × H) / 1000',
+          flow_m3hr,
+          head_m,
         },
-        explanation: `💪 Hydraulic Power: ${power_kW.toFixed(2)} kW (${power_hp.toFixed(2)} HP) for flow ${flow_m3hr} m³/h at ${head_m} m head`
-      }
-    };
-    
-    console.log('✅ Sending response:', response.result.explanation);
-    res.json(response);
-    
+        explanation: `Hydraulic Power: ${power_kW.toFixed(2)} kW (${power_hp.toFixed(2)} HP) for flow ${flow_m3hr} m³/h at ${head_m} m head`,
+      },
+    });
+
   } catch (err) {
-    console.error('❌ Unexpected error:', err);
-    res.status(500).json({ 
-      ok: false, 
+    console.error('AI query error:', err.message);
+    res.status(500).json({
+      ok: false,
       error: 'Server error processing query',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined,
     });
   }
 });
