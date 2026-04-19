@@ -22,16 +22,6 @@ function calcHydraulicPower({ flow_m3hr, head_m, density_kgm3 = 1000 }) {
   };
 }
 
-// ── Tool: PSV gas sizing ──────────────────────────────────────────
-function calcGasSizing(params) {
-  try {
-    const result = PSVApi.sizeGas(params);
-    return { type: 'gas_sizing', ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
-  } catch (e) {
-    return { type: 'gas_sizing', error: e.message };
-  }
-}
-
 // ── Extract numbers from text ─────────────────────────────────────
 function extractNumbers(text) {
   const nums = [];
@@ -70,6 +60,21 @@ function detectTool(query) {
   return null;
 }
 
+// ── Parse [SIZING_CARD] block from AI response ────────────────────
+function extractSizingCard(text) {
+  const match = text.match(/\[SIZING_CARD\]([\s\S]*?)\[\/SIZING_CARD\]/);
+  if (!match) return { cleanText: text, sizingCard: null };
+
+  try {
+    const sizingCard = JSON.parse(match[1].trim());
+    const cleanText = text.replace(/\[SIZING_CARD\][\s\S]*?\[\/SIZING_CARD\]/, '').trim();
+    return { cleanText, sizingCard };
+  } catch {
+    const cleanText = text.replace(/\[SIZING_CARD\][\s\S]*?\[\/SIZING_CARD\]/, '').trim();
+    return { cleanText, sizingCard: null };
+  }
+}
+
 // ── Call Gemini ───────────────────────────────────────────────────
 async function callGemini(messages) {
   if (!GEMINI_API_KEY) {
@@ -89,7 +94,7 @@ You think and respond like an experienced engineer, NOT a chatbot or form-fillin
 - Use reasonable engineering defaults when values are not provided
 - Guide the user step-by-step toward a complete answer
 - Estimate fluid properties from context (e.g. "hexane → MW ≈ 86, k ≈ 1.06")
-- End with a focused ask for only the 1-2 most critical missing inputs
+- End with a focused ask for only the 1–2 most critical missing inputs
 
 **NEVER DO:**
 - Say "I need all inputs before I can help"
@@ -149,23 +154,34 @@ Structure your response like this:
 
 ---
 
-## Example Behavior
+## SIZING CARD (Important — output when appropriate)
 
-User: "Design a PSV for a hydrocarbon gas system"
+When you have performed a **complete or substantially complete PSV sizing calculation** (meaning you know or can reasonably estimate: set pressure, flow rate, temperature, fluid type, and the required orifice area), you MUST append a structured summary block at the very end of your response.
 
-You respond:
-- Explain it's an API 520 gas sizing problem
-- Assume MW ≈ 93 (C6/C7 mixture), k ≈ 1.05, Z ≈ 0.95
-- Show formula: A = W√(TZ) / (C·Kd·P1·Kb·Kc)
-- Plug in assumed values, leave [W] and [T] and [P_set] as unknowns
-- Ask: "To complete sizing, what is the relief flow rate (kg/h or lb/h) and set pressure (barg or psig)?"
-- Provide example: "e.g., flow = 5000 kg/h, T = 120°C, P_set = 10 barg"
+Output this block ONLY when you have actually computed or estimated A_in2 or at least the key sizing inputs. Do NOT output it for general questions or incomplete scenarios.
 
----
+Format (append after your normal response):
 
-When tool/calculation results are injected into the conversation, interpret them clearly and professionally. Present numbers with appropriate units and significant figures.
+[SIZING_CARD]
+{
+  "service": "<fluid/service description, e.g. Propane vapor — blocked outlet>",
+  "phase": "<one of: gas, steam, liquid, twophase, fire, thermal, tuberupture, blowdown>",
+  "scenario": "<relief scenario, e.g. Blocked outlet, Fire case, Utility failure>",
+  "set_pressure_barg": <number or null>,
+  "set_pressure_psig": <number or null>,
+  "temp_C": <number or null>,
+  "flow_kgh": <number or null>,
+  "MW": <number or null>,
+  "k": <number or null>,
+  "Z": <number or null>,
+  "A_in2": <calculated required area in in² or null if not yet computed>,
+  "orifice": "<API 526 orifice letter or null>",
+  "assumptions": "<comma-separated list of key assumptions made>",
+  "notes": "<any important engineering notes>"
+}
+[/SIZING_CARD]
 
-Be concise. Do not repeat greetings or re-introduce yourself in follow-up messages.`;
+Be concise. Do not repeat greetings or re-introduce yourself in follow-up messages. When tool/calculation results are injected, interpret them clearly with appropriate units.`;
 
   const contents = messages.map(msg => ({
     role: msg.role === 'assistant' ? 'model' : 'user',
@@ -177,7 +193,7 @@ Be concise. Do not repeat greetings or re-introduce yourself in follow-up messag
     contents,
     generationConfig: {
       temperature: 0.65,
-      maxOutputTokens: 1500,
+      maxOutputTokens: 1800,
     }
   };
 
@@ -213,7 +229,7 @@ router.post('/', async (req, res) => {
 
     const userQuery = lastMessage.content;
 
-    // Detect if a tool should be called
+    // Detect if a calculation tool should be called
     const toolCall = detectTool(userQuery);
 
     if (toolCall) {
@@ -230,18 +246,22 @@ router.post('/', async (req, res) => {
         }
       ];
 
-      const aiText = await callGemini(augmentedMessages);
+      const rawText = await callGemini(augmentedMessages);
+      const { cleanText, sizingCard } = extractSizingCard(rawText);
 
       return res.json({
         ok: true,
-        reply: aiText,
+        reply: cleanText,
         tool: toolCall.tool,
         toolResult,
+        sizingCard,
       });
     }
 
-    const aiText = await callGemini(messages);
-    return res.json({ ok: true, reply: aiText });
+    const rawText = await callGemini(messages);
+    const { cleanText, sizingCard } = extractSizingCard(rawText);
+
+    return res.json({ ok: true, reply: cleanText, sizingCard });
 
   } catch (err) {
     console.error('AI chat error:', err.message);
