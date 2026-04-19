@@ -45,3 +45,9 @@ externalPort = 3000
 deploymentTarget = "autoscale"
 run = ["node", "server/index.js"]
 build = ["bash", "-c", "cd client && npm install && npm run build"]
+
+[userenv]
+
+[userenv.shared]
+PORT = "3001"
+NODE_ENV = "development"
