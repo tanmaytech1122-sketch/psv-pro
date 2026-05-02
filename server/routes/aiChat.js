@@ -1,309 +1,219 @@
 'use strict';
 
-const express = require('express');
-const router  = express.Router();
-const PSVApi  = require('../engines/psv-engine');
+const express  = require('express');
+const router   = express.Router();
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL   = 'gemini-2.5-flash';
-const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const { functionDeclarations, executeTool } = require('../lib/tools');
+const { retrieveRelevantChunks, loadDocuments }  = require('../lib/rag');
 
-// ── System prompt with STRICT calculation trigger rules ─────────────────
-const SYSTEM_PROMPT = `You are a senior chemical/process engineer and AI assistant for PSV Pro.
+// Pre-load knowledge base on startup
+loadDocuments();
 
-CRITICAL RULE - YOU MUST FOLLOW THIS EXACTLY:
-When the user asks for a PSV SIZING calculation (asks for "size", "design", "calculate" a PSV/PRV), you MUST:
-1. First provide a complete Markdown answer with all steps
-2. THEN append EXACTLY this format on a new line (no extra spaces):
-%%CALC:{"type":"calculation","action":"gas","params":{"P_set":10,"T_rel":150,"W":5000,"MW":44,"k":1.14,"Z":0.95},"service":"propane gas","scenario":"blocked outlet"}%%
+const GEMINI_MODEL = 'gemini-2.5-flash';
 
-For LIQUID services use action:"liquid"
-For STEAM services use action:"steam"
-For FIRE case use action:"fire"
+const SYSTEM_PROMPT = `You are a senior process engineer specialised in Pressure Safety Valve (PSV) and Pressure Relief Valve (PRV) design per API 520, API 521, and API 526.
 
-EXAMPLE for propane gas with 10 barg, 5000 kg/h:
-%%CALC:{"type":"calculation","action":"gas","params":{"P_set":10,"T_rel":150,"W":5000,"MW":44,"k":1.14},"service":"propane relief","scenario":"blocked outlet"}%%
+STRICT RULES — follow exactly:
+1. NEVER perform numerical calculations yourself. ALWAYS call the appropriate tool for any calculation.
+2. For knowledge questions (standards, theory, definitions, procedures), answer using the CONTEXT provided. If the answer is not in the context, reply: "Not found in provided data."
+3. If a calculation is requested but required inputs are missing, ask ONLY for the specific missing values. Do not ask for values you can estimate (e.g. Z-factor, k for common fluids).
+4. Always state units explicitly in every answer.
+5. Keep answers short, structured, and professional.
+6. Never make up numerical results — all numbers must come from tool responses.`;
 
-NEVER skip the %%CALC%% trigger when user asks for sizing!
+const CLASSIFY_PROMPT = `Classify the following engineering query into exactly one of two intents:
+- "calculation": user wants a numerical result (sizing, power, area, flow rate, etc.)
+- "knowledge": user wants explanation, definition, theory, standards information, troubleshooting, or comparison
 
-FLUID PROPERTIES (estimate automatically):
-- Propane: MW=44, k=1.14
-- Butane: MW=58, k=1.10
-- Hexane: MW=86, k=1.06
-- Heptane: MW=100, k=1.05
-- Methane: MW=16, k=1.31
-- Ethane: MW=30, k=1.19
-- Steam: MW=18, k=1.31
-- Air: MW=29, k=1.40
+Query: "{QUERY}"
 
-Always estimate missing data. Never ask for MW, k, Z, density.
+Respond with ONLY one word: calculation OR knowledge`;
 
-For hydraulic power questions: Just answer directly without calculation trigger.`;
-
-// ── Run PSV engine calculation ────────────────────────────────────
-function runCalculation(action, params) {
-  console.log('Running calculation:', action, params);
-  
-  const barg2psig = (b) => b * 14.5038;
-  const kgh2lbh   = (k) => k * 2.20462;
-  const C2F       = (c) => c * 9/5 + 32;
-
+// ── Classify intent ───────────────────────────────────────────────
+async function classifyIntent(query, genAI) {
   try {
-    switch (action) {
-      case 'gas': {
-        const p = {
-          P_set:        barg2psig(params.P_set),
-          OP:           params.OP    ?? 10,
-          P_back_total: params.P_back_total ?? 0,
-          T_rel:        params.T_rel ? C2F(params.T_rel) : 150,
-          W:            kgh2lbh(params.W || 5000),
-          MW:           params.MW,
-          k:            params.k,
-          Z:            params.Z    ?? 0.95,
-          Kd:           params.Kd   ?? 0.975,
-          valve_type:   params.valve_type ?? 'conventional',
-          Kc:           params.Kc   ?? 1.0,
-          inlet_dP:     params.inlet_dP ?? 0,
-        };
-        const result = PSVApi.sizeGas(p);
-        return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
-      }
-      case 'steam': {
-        const p = {
-          P_set:        barg2psig(params.P_set),
-          OP:           params.OP    ?? 10,
-          P_back_total: params.P_back_total ?? 0,
-          T_rel:        params.T_rel ? C2F(params.T_rel) : 200,
-          W:            kgh2lbh(params.W || 5000),
-          Kd:           params.Kd   ?? 0.975,
-          valve_type:   params.valve_type ?? 'conventional',
-          Kc:           params.Kc   ?? 1.0,
-        };
-        const result = PSVApi.sizeSteam(p);
-        return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
-      }
-      case 'liquid': {
-        const p = {
-          P_set:        barg2psig(params.P_set),
-          OP:           params.OP    ?? 10,
-          P_back_total: params.P_back_total ?? 0,
-          W:            kgh2lbh(params.W || 5000),
-          rho_lbft3:    params.rho_lbft3 ?? 43.7,
-          visc_cp:      params.visc_cp ?? 1.0,
-          Kd:           params.Kd   ?? 0.65,
-          valve_type:   params.valve_type ?? 'conventional',
-          Kc:           params.Kc   ?? 1.0,
-        };
-        const result = PSVApi.sizeLiquid(p);
-        return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
-      }
-      case 'fire': {
-        const p = {
-          P_set:           barg2psig(params.P_set),
-          D_ft:            params.D_ft ?? 10,
-          L_ft:            params.L_ft ?? 20,
-          liquid_level_pct: params.liquid_level_pct ?? 60,
-          orientation:     params.orientation ?? 'vertical',
-          F_factor:        params.F_factor ?? 1.0,
-          lambda_BTUperlb: params.lambda_BTUperlb ?? 150,
-          T_rel:           params.T_rel ? C2F(params.T_rel) : 250,
-          MW:              params.MW ?? 44,
-          k:               params.k  ?? 1.14,
-          Z:               params.Z  ?? 0.95,
-        };
-        const result = PSVApi.sizeFireCase(p);
-        return { ...result, orifice: PSVApi.selectOrifice(result.A_in2) };
-      }
-      default:
-        throw new Error(`Unknown action: ${action}`);
-    }
-  } catch (err) {
-    console.error('Engine error:', err);
-    throw err;
+    const model  = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const prompt = CLASSIFY_PROMPT.replace('{QUERY}', query);
+    const result = await model.generateContent(prompt);
+    const text   = result.response.text().trim().toLowerCase();
+    return text.includes('calculation') ? 'calculation' : 'knowledge';
+  } catch {
+    return 'knowledge';
   }
 }
 
-// ── Format engine result ───────────────────────────────────
-function buildVerifiedResultSection(action, params, result) {
-  const psig2barg = (p) => (p / 14.5038).toFixed(2);
-  const orifice   = result.orifice;
-  const flowLabel = result.isCrit ? 'Critical (choked)' : 'Subcritical';
-  
-  return `
-
----
-
-**✅ PSV Sizing Result (Engine Calculated)**
-
-| Parameter | Value |
-|-----------|-------|
-| Required Area | **${result.A_in2?.toFixed(4) || 'N/A'} in²** |
-| Selected Orifice | **${orifice?.d || 'N/A'}** (${orifice?.a?.toFixed(3) || '?'} in²) |
-| Orifice Size | ${orifice?.in_sz || 'N/A'} (API 526) |
-| Relief Pressure P1 | ${result.P1_psia?.toFixed(1) || 'N/A'} psia (${P1_barg} barg) |
-| Flow Regime | ${flowLabel} |
-
-> ✅ Calculated by PSV Pro engine using API 520/521 standards`;
-}
-
-// ── Extract %%CALC:{}%% trigger ───────────────────────────────
-function extractCalcTrigger(text) {
-  // Match the exact pattern with JSON
-  const match = text.match(/%%CALC:(\{[^}]*\})%%/);
-  if (!match) {
-    console.log('No calc trigger found in response');
-    return { cleanText: text, calcObj: null };
-  }
-
-  try {
-    const calcObj = JSON.parse(match[1]);
-    console.log('Found calc trigger:', calcObj);
-    
-    if (calcObj.type === 'calculation' && calcObj.action && calcObj.params) {
-      const cleanText = text.replace(/%%CALC:\{[^}]*\}%%/, '').trim();
-      return { cleanText, calcObj };
-    }
-  } catch (err) {
-    console.error('Failed to parse calc trigger:', err.message);
-  }
-  
-  const cleanText = text.replace(/%%CALC:\{[^}]*\}%%/, '').trim();
-  return { cleanText, calcObj: null };
-}
-
-// ── Call Gemini API ──────────────────────────────────────────
-async function callGemini(messages) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY not configured in .env');
-  }
-
-  // Build conversation with system prompt
-  const contents = [];
-  
-  // Add system instruction
-  contents.push({
-    role: 'user',
-    parts: [{ text: `System instruction: ${SYSTEM_PROMPT}\n\nPlease respond professionally.` }]
-  });
-  
-  // Add conversation history (skip first if we added system)
-  for (const msg of messages) {
-    contents.push({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }]
+// ── Convert chat history to Gemini format ─────────────────────────
+function toGeminiHistory(messages) {
+  const history = [];
+  for (const m of messages.slice(0, -1)) {
+    history.push({
+      role:  m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
     });
   }
+  return history;
+}
 
-  const body = {
-    contents: contents,
-    generationConfig: {
-      temperature: 0.3,  // Lower temperature for more consistent output
-      maxOutputTokens: 2000,
-      topP: 0.9,
-    }
+// ── Build a SizingCard from tool result ───────────────────────────
+function buildSizingCard(toolName, args, result) {
+  if (toolName === 'calculate_hydraulic_power') return null;
+
+  const phase = {
+    size_psv_gas:    'gas',
+    size_psv_steam:  'steam',
+    size_psv_liquid: 'liquid',
+    size_psv_fire:   'fire',
+  }[toolName] || 'gas';
+
+  const inp = result.inputs_used || args;
+  return {
+    service:           inp.fluid || `${phase} service`,
+    phase,
+    scenario:          args.scenario || 'blocked outlet',
+    set_pressure_barg: inp.P_set_barg,
+    flow_kgh:          inp.W_kgh,
+    temp_C:            inp.T_rel_C,
+    MW:                inp.MW,
+    k:                 inp.k,
+    Z:                 inp.Z,
+    A_in2:             result.required_area_in2,
+    orifice:           result.orifice_designation,
+    orifice_area_in2:  result.orifice_area_in2,
+    selected_orifice_size: result.orifice_size,
+    utilisation_pct:   result.utilisation_pct,
+    toolResult:        result,
   };
-
-  const url = `${GEMINI_URL}?key=${GEMINI_API_KEY}`;
-  console.log('Calling Gemini API...');
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini API error: ${response.status} - ${error}`);
-  }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  console.log('Gemini response length:', text.length);
-  
-  return { rawText: text };
 }
 
-// ── POST /api/ai-chat ────────────────────────────────────────
+// ── POST /api/ai-chat ─────────────────────────────────────────────
 router.post('/', async (req, res) => {
+  const { messages } = req.body;
+
+  if (!messages?.length) {
+    return res.status(400).json({ ok: false, error: 'messages array required' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ ok: false, error: 'GEMINI_API_KEY not configured' });
+  }
+
+  const genAI      = new GoogleGenerativeAI(apiKey);
+  const userQuery  = messages[messages.length - 1]?.content || '';
+
+  console.log(`\n=== Agent Request ===`);
+  console.log(`Query: ${userQuery.substring(0, 120)}`);
+
   try {
-    const { messages } = req.body;
-    
-    if (!messages || !messages.length) {
-      return res.status(400).json({ ok: false, error: 'Messages required' });
+    // ── STEP 1: Classify intent ──────────────────────────────────
+    const intent = await classifyIntent(userQuery, genAI);
+    console.log(`Intent: ${intent}`);
+
+    // ── STEP 2A: Knowledge query → RAG + Gemini ──────────────────
+    if (intent === 'knowledge') {
+      const chunks = retrieveRelevantChunks(userQuery, 3);
+      const contextUsed = chunks.length > 0;
+
+      const contextBlock = contextUsed
+        ? `\n\nCONTEXT (from engineering knowledge base):\n${chunks.map((c, i) => `[${i+1}] ${c.source}:\n${c.text}`).join('\n\n')}`
+        : '';
+
+      const systemWithContext = SYSTEM_PROMPT + contextBlock;
+      const model = genAI.getGenerativeModel({
+        model: GEMINI_MODEL,
+        systemInstruction: systemWithContext,
+      });
+
+      const history = toGeminiHistory(messages);
+      const chat    = model.startChat({ history });
+      const result  = await chat.sendMessage(userQuery);
+      const reply   = result.response.text();
+
+      console.log(`Knowledge reply (RAG: ${contextUsed}, chunks: ${chunks.length})`);
+
+      return res.json({
+        ok:           true,
+        reply,
+        intent:       'knowledge',
+        tool_called:  null,
+        context_used: contextUsed,
+        rag_sources:  chunks.map(c => c.source),
+        sizingCard:   null,
+        toolResult:   null,
+      });
     }
 
-    console.log('\n=== New Chat Request ===');
-    console.log('User query:', messages[messages.length - 1]?.content?.substring(0, 100));
+    // ── STEP 2B: Calculation query → tool calling ─────────────────
+    const model = genAI.getGenerativeModel({
+      model: GEMINI_MODEL,
+      tools: [{ functionDeclarations }],
+      systemInstruction: SYSTEM_PROMPT,
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    });
 
-    // Get AI response
-    const { rawText } = await callGemini(messages);
-    
-    // Check for calculation trigger
-    const { cleanText, calcObj } = extractCalcTrigger(rawText);
-    
-    // If we have a calculation, run the engine
-    if (calcObj) {
-      console.log('Executing PSV calculation...');
-      
-      try {
-        const result = runCalculation(calcObj.action, calcObj.params);
-        const verifiedSection = buildVerifiedResultSection(calcObj.action, calcObj.params, result);
-        const finalReply = cleanText + verifiedSection;
-        
-        // Build sizing card
-        const sizingCard = {
-          service: calcObj.service || `${calcObj.action} sizing`,
-          phase: calcObj.action,
-          scenario: calcObj.scenario || 'blocked outlet',
-          set_pressure_barg: calcObj.params.P_set,
-          flow_kgh: calcObj.params.W,
-          MW: calcObj.params.MW,
-          k: calcObj.params.k,
-          A_in2: result.A_in2,
-          orifice: result.orifice?.d,
-          selected_orifice_size: result.orifice?.in_sz,
-          utilisation_pct: result.orifice?.cap_pct
-        };
-        
-        console.log('✅ Calculation complete! Orifice:', result.orifice?.d);
-        
-        return res.json({
-          ok: true,
-          reply: finalReply,
-          sizingCard: sizingCard,
-          engineResult: {
-            area_in2: result.A_in2,
-            orifice: result.orifice?.d,
-            orifice_size: result.orifice?.in_sz,
-            is_choked: result.isCrit
-          }
-        });
-        
-      } catch (engineErr) {
-        console.error('Engine error:', engineErr);
-        return res.json({
-          ok: true,
-          reply: cleanText + `\n\n⚠️ Engine calculation error: ${engineErr.message}. Please check input parameters.`,
-          sizingCard: null
+    const history = toGeminiHistory(messages);
+    const chat    = model.startChat({ history });
+
+    let result       = await chat.sendMessage(userQuery);
+    let toolCalled   = null;
+    let toolArgs     = null;
+    let toolOutput   = null;
+    let sizingCard   = null;
+
+    // ── Agent loop: handle tool calls ─────────────────────────────
+    const MAX_TURNS = 3;
+    let turns = 0;
+
+    while (turns < MAX_TURNS) {
+      const calls = result.response.functionCalls();
+      if (!calls?.length) break;
+
+      turns++;
+      const functionResponses = [];
+
+      for (const call of calls) {
+        console.log(`Tool call: ${call.name}`, JSON.stringify(call.args).substring(0, 200));
+        toolCalled = call.name;
+        toolArgs   = call.args;
+
+        try {
+          toolOutput = executeTool(call.name, call.args);
+          console.log(`Tool result:`, JSON.stringify(toolOutput).substring(0, 200));
+
+          sizingCard = buildSizingCard(call.name, call.args, toolOutput);
+        } catch (err) {
+          console.error(`Tool error: ${err.message}`);
+          toolOutput = { error: err.message };
+        }
+
+        functionResponses.push({
+          functionResponse: {
+            name:     call.name,
+            response: toolOutput,
+          },
         });
       }
+
+      result = await chat.sendMessage(functionResponses);
     }
-    
-    // No calculation trigger - just return the AI response
-    console.log('No calculation needed, returning chat response');
+
+    const reply = result.response.text();
+    console.log(`Calculation reply (tool: ${toolCalled})`);
+
     return res.json({
-      ok: true,
-      reply: rawText,
-      sizingCard: null
+      ok:           true,
+      reply,
+      intent:       'calculation',
+      tool_called:  toolCalled,
+      context_used: false,
+      sizingCard,
+      toolResult:   toolCalled === 'calculate_hydraulic_power' ? toolOutput : null,
     });
-    
+
   } catch (err) {
-    console.error('Server error:', err);
-    res.status(500).json({
-      ok: false,
-      error: err.message
-    });
+    console.error('Agent error:', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 

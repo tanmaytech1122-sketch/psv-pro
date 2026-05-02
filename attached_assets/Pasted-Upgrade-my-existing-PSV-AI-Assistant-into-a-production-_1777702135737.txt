@@ -1,0 +1,202 @@
+Upgrade my existing PSV AI Assistant into a production-level ENGINEERING AI AGENT.
+
+IMPORTANT:
+- Use ONLY Google Gemini API (NO OpenRouter, NO Claude)
+- Follow industrial AI architecture (NOT chatbot)
+- Focus on accuracy, tool usage, and structured outputs
+
+========================================
+🎯 OBJECTIVE
+========================================
+Build a PSV Engineering AI system that:
+
+1. Understands user queries
+2. Decides:
+   - Knowledge question → use RAG (domain data)
+   - Calculation → call backend tools
+3. NEVER performs calculations using LLM
+4. Generates structured engineering reports (Word/PDF)
+
+========================================
+🧠 CORE ARCHITECTURE (MANDATORY)
+========================================
+Implement AGENT LOOP:
+
+Perceive → Think → Act → Observe
+
+Flow:
+1. User query
+2. Classify intent:
+   - "calculation"
+   - "knowledge"
+3. If calculation:
+   → call tool (JS backend function)
+4. If knowledge:
+   → use RAG (retrieve domain chunks)
+5. Return structured final answer
+
+========================================
+⚙️ GEMINI API ONLY
+========================================
+
+Use:
+@google/generative-ai
+
+Model:
+gemini-1.5-flash (or latest flash)
+
+Use function calling (tools) with:
+functionDeclarations format
+
+DO NOT use:
+- OpenRouter
+- Claude API
+- Any other provider
+
+========================================
+🛠️ TOOL CALLING (CRITICAL)
+========================================
+
+Define tools:
+
+1. calculate_hydraulic_power(flow_m3hr, head_m, density_kg_m3)
+2. size_psv_gas(...)
+3. size_psv_liquid(...)
+4. size_psv_fire(...)
+
+Rules:
+- LLM MUST call tool for ALL calculations
+- LLM MUST NOT generate numbers
+- If inputs missing → ask only missing values
+
+========================================
+📚 RAG (DOMAIN KNOWLEDGE)
+========================================
+
+Create:
+- /knowledge/ folder
+
+Add documents:
+- API 520 summary
+- API 521 summary
+- PSV chattering
+- Terminology
+
+Implement:
+server/lib/rag.js
+
+Functions:
+- loadDocuments()
+- chunkText(300–400 words, overlap 50)
+- create TF-IDF embeddings (NO API cost)
+- retrieveRelevantChunks(query, topK=3)
+
+Rules:
+- Use RAG ONLY for knowledge queries
+- Inject context into system prompt
+- If not found → reply "Not found in provided data"
+
+========================================
+📄 REPORT GENERATION (VERY IMPORTANT)
+========================================
+
+Create:
+server/lib/reportGenerator.js
+
+Use:
+docx npm package
+
+Create API:
+POST /api/report
+
+Input:
+PSV calculation result
+
+Output:
+Downloadable .docx file
+
+Report structure:
+
+Title: PSV Sizing Report
+
+Fields:
+- Fluid
+- Set Pressure
+- Relieving Pressure
+- Temperature
+- Flow Rate
+- Assumptions
+- Calculated Area
+- Selected Orifice
+- Notes
+
+========================================
+🧠 SYSTEM PROMPT
+========================================
+
+"You are a senior process engineer specialized in PSV design (API 520/521).
+
+Rules:
+- NEVER perform calculations yourself
+- ALWAYS use tools for numerical results
+- Use CONTEXT (RAG) for knowledge answers
+- If answer not in context → say 'Not found in provided data'
+- Ask only missing inputs
+- Keep answers short, structured, and professional
+- Always include units"
+
+========================================
+📊 RESPONSE FORMAT
+========================================
+
+Return JSON:
+
+{
+  "intent": "calculation | knowledge",
+  "tool_called": "",
+  "context_used": true/false,
+  "inputs": {},
+  "result": {},
+  "final_answer": ""
+}
+
+========================================
+🧪 TEST CASES
+========================================
+
+1. "calculate hydraulic power for 200 m3/h and 40 m head"
+→ MUST call tool
+
+2. "what is API 520?"
+→ MUST use RAG (context_used = true)
+
+3. "design PSV for propane"
+→ MUST ask required inputs
+
+========================================
+🧹 CLEANUP
+========================================
+- Remove unused files
+- Remove fallback logic
+- Keep clean modular structure:
+  - aiChat.js
+  - rag.js
+  - tools.js
+  - reportGenerator.js
+
+========================================
+📁 OUTPUT REQUIRED
+========================================
+- Show updated backend files only
+- Highlight changes
+- Provide working clean code
+
+========================================
+FINAL NOTE:
+This is NOT a chatbot.
+This is an ENGINEERING AI SYSTEM.
+
+Accuracy > creativity
+Tool usage is mandatory
+RAG is mandatory for knowledge
+Gemini API only

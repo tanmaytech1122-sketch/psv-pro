@@ -13,8 +13,10 @@ const rateLimit  = require('express-rate-limit');
 const sizingRouter   = require('./routes/sizing');
 const projectsRouter = require('./routes/projects');
 const aiChatRouter   = require('./routes/aiChat');
+const reportRouter   = require('./routes/report');
 
 const app    = express();
+app.set('trust proxy', 1);
 const PORT   = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -41,6 +43,7 @@ app.use('/api/', rateLimit({
 app.use('/api/size',     sizingRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/ai-chat',  aiChatRouter);
+app.use('/api/report',   reportRouter);
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
