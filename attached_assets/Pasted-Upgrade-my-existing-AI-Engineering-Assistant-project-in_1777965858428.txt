@@ -1,0 +1,233 @@
+Upgrade my existing AI Engineering Assistant project into a TRAINING-AWARE + DATASET-READY SYSTEM.
+
+IMPORTANT:
+This is NOT just a chatbot.
+Follow an INDUSTRIAL AI + TRAINING + DATA PIPELINE approach.
+
+==================================
+🎯 OBJECTIVE
+==================================
+Enhance my current AI assistant with:
+
+1. Dataset preparation pipeline (for fine-tuning)
+2. PDF → structured training data conversion
+3. RAG + Tool-based hybrid system
+4. Engineering report generation (PSV datasheet export)
+5. Training-ready architecture (for future Qwen fine-tuning)
+
+==================================
+🧠 PART 1 — DATASET CREATION PIPELINE
+==================================
+
+Create a module:
+
+server/lib/datasetBuilder.js
+
+Features:
+- Accept raw text or document content
+- Convert into structured JSON training format
+
+Support formats:
+
+Format 1:
+{
+  "input": "What is PSV chattering?",
+  "output": "Explanation..."
+}
+
+Format 2:
+{
+  "instruction": "Explain API 520",
+  "response": "Answer..."
+}
+
+Add function:
+buildDatasetFromText(text, sourceName)
+
+Also:
+- Save output as /dataset/training_data.json
+- Include source metadata
+
+==================================
+📄 PART 2 — PDF → TEXT → DATASET PIPELINE
+==================================
+
+Create module:
+
+server/lib/pdfProcessor.js
+
+Features:
+- Accept PDF file upload
+- Extract text (use pdf-parse or similar)
+- Clean text
+- Send to datasetBuilder
+- Store chunks
+
+Pipeline:
+PDF → Text → Chunk → JSON dataset
+
+==================================
+📚 PART 3 — IMPROVE RAG SYSTEM
+==================================
+
+Update existing RAG:
+
+- Keep TF-IDF approach (no API cost)
+- Improve chunk tagging:
+  - source
+  - topic
+  - section
+
+- Return:
+  context_used: true/false
+  context_sources: [file names]
+
+==================================
+🧠 PART 4 — TRAINING AWARE SYSTEM PROMPT
+==================================
+
+Update system prompt:
+
+"You are a senior process engineer (API 520/521).
+
+Rules:
+- Never perform calculations yourself
+- Always use tools for calculations
+- Use CONTEXT if available (RAG)
+- If data is missing → ask user
+- Answers must be structured and with units
+
+Training Awareness:
+- Responses should be consistent with dataset format
+- Avoid hallucination
+- Prefer grounded answers over guessing"
+
+==================================
+⚙️ PART 5 — MOCK TRAINING PIPELINE (IMPORTANT)
+==================================
+
+Create file:
+
+server/lib/mockTraining.js
+
+Simulate training pipeline:
+
+- Load dataset JSON
+- Show:
+  - number of samples
+  - token estimate
+  - training readiness
+
+Simulate:
+
+prepareForTraining(dataset)
+→ returns:
+{
+  samples: number,
+  tokens_estimate: number,
+  ready: true
+}
+
+(No real training needed)
+
+==================================
+📊 PART 6 — REPORT GENERATION (VERY IMPORTANT)
+==================================
+
+Add feature:
+
+Generate PSV Datasheet / Report as:
+
+1. PDF
+2. Word (DOCX)
+
+Create:
+
+server/lib/reportGenerator.js
+
+Include:
+- Input parameters
+- Calculation results
+- API references
+- Assumptions
+
+Add API:
+
+POST /api/export-report
+
+==================================
+🛠️ PART 7 — AGENT ARCHITECTURE (KEEP THIS)
+==================================
+
+Maintain:
+
+Perceive → Think → Act → Observe loop
+
+- Tool calling for:
+  - hydraulic power
+  - PSV sizing
+
+- NO fallback logic
+- NO direct calculations by LLM
+
+==================================
+📁 PART 8 — FILE STRUCTURE
+==================================
+
+Add:
+
+/dataset/
+/knowledge/
+/uploads/
+
+==================================
+🧪 PART 9 — TEST CASES
+==================================
+
+1. "calculate hydraulic power for 200 m3/h and 40 m head"
+→ MUST call tool
+
+2. "what is API 520?"
+→ MUST use RAG
+
+3. Upload PDF → dataset created
+
+4. Generate PSV report → downloadable
+
+==================================
+📦 OUTPUT REQUIRED
+==================================
+
+1. New files:
+   - datasetBuilder.js
+   - pdfProcessor.js
+   - mockTraining.js
+   - reportGenerator.js
+
+2. Updated:
+   - aiChat.js (RAG + agent + context)
+   
+3. Show:
+   - sample dataset JSON
+   - sample report output
+   - console logs for pipeline
+
+==================================
+IMPORTANT RULES
+==================================
+
+- Do NOT redesign frontend UI
+- Do NOT remove existing tools
+- Keep code modular
+- Focus on backend intelligence
+
+==================================
+FINAL GOAL
+==================================
+
+System should:
+- Answer using RAG
+- Calculate using tools
+- Convert PDFs into dataset
+- Be ready for fine-tuning (Qwen / LLM)
+- Generate engineering reports

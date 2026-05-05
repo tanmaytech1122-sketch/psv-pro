@@ -9,6 +9,28 @@ const OVERLAP_WORDS = 50;
 
 let _chunks = null;
 
+// ── Topic inference from source filename ─────────────────────────
+const TOPIC_MAP = {
+  api520:        'API 520 — PSV Sizing (Part I: Sizing and Selection)',
+  api521:        'API 521 — Pressure Relieving and Depressuring Systems',
+  'psv-chattering': 'PSV Chattering — Causes, Diagnosis, and Prevention',
+  terminology:   'PSV/PRV Engineering Terminology and Definitions',
+};
+
+function inferTopic(source) {
+  return TOPIC_MAP[source] || `Engineering Reference: ${source}`;
+}
+
+// ── Extract section heading from chunk text ───────────────────────
+function inferSection(text) {
+  // Look for markdown headings or ALL-CAPS lines at the start
+  const lines   = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const firstLine = lines[0] || '';
+  if (/^#+\s/.test(firstLine)) return firstLine.replace(/^#+\s*/, '');
+  if (/^[A-Z][A-Z\s\d./-]{5,}$/.test(firstLine)) return firstLine;
+  return null;
+}
+
 // ── Tokenise text into lowercase words ───────────────────────────
 function tokenise(text) {
   return text
@@ -27,13 +49,23 @@ function termFreq(tokens) {
 
 // ── Chunk a document into overlapping windows ─────────────────────
 function chunkText(text, source) {
-  const words   = text.split(/\s+/);
-  const chunks  = [];
-  const step    = CHUNK_WORDS - OVERLAP_WORDS;
+  const words  = text.split(/\s+/);
+  const chunks = [];
+  const step   = CHUNK_WORDS - OVERLAP_WORDS;
+  const topic  = inferTopic(source);
+
   for (let i = 0; i < words.length; i += step) {
     const slice   = words.slice(i, i + CHUNK_WORDS).join(' ');
     const tokens  = tokenise(slice);
-    chunks.push({ text: slice, source, tokens, tf: termFreq(tokens) });
+    const section = inferSection(slice);
+    chunks.push({
+      text:    slice,
+      source,
+      topic,
+      section: section || `${source} — chunk ${chunks.length + 1}`,
+      tokens,
+      tf:      termFreq(tokens),
+    });
     if (i + CHUNK_WORDS >= words.length) break;
   }
   return chunks;
@@ -51,13 +83,19 @@ function loadDocuments() {
 
   const files = fs.readdirSync(KNOWLEDGE_DIR).filter(f => f.endsWith('.md'));
   for (const file of files) {
-    const content = fs.readFileSync(path.join(KNOWLEDGE_DIR, file), 'utf-8');
+    const content    = fs.readFileSync(path.join(KNOWLEDGE_DIR, file), 'utf-8');
     const fileChunks = chunkText(content, file.replace('.md', ''));
     _chunks.push(...fileChunks);
   }
 
   console.log(`RAG: loaded ${_chunks.length} chunks from ${files.length} documents`);
   return _chunks;
+}
+
+// ── Invalidate cache (call after adding new documents at runtime) ─
+function reloadDocuments() {
+  _chunks = null;
+  return loadDocuments();
 }
 
 // ── Compute IDF across all chunks ─────────────────────────────────
@@ -96,6 +134,7 @@ function cosineSim(qTokens, chunkTf, idf) {
 }
 
 // ── Public: retrieve top-k relevant chunks for a query ────────────
+// Returns: [{ source, topic, section, text, score }]
 function retrieveRelevantChunks(query, topK = 3) {
   const chunks = loadDocuments();
   if (!chunks.length) return [];
@@ -104,16 +143,18 @@ function retrieveRelevantChunks(query, topK = 3) {
   const qTokens = tokenise(query);
 
   const scored = chunks.map(c => ({
-    ...c,
-    score: cosineSim(qTokens, c.tf, idf),
+    source:  c.source,
+    topic:   c.topic,
+    section: c.section,
+    text:    c.text,
+    score:   cosineSim(qTokens, c.tf, idf),
   }));
 
   scored.sort((a, b) => b.score - a.score);
 
   return scored
     .slice(0, topK)
-    .filter(c => c.score > 0)
-    .map(c => ({ source: c.source, text: c.text, score: c.score }));
+    .filter(c => c.score > 0);
 }
 
-module.exports = { loadDocuments, retrieveRelevantChunks };
+module.exports = { loadDocuments, reloadDocuments, retrieveRelevantChunks };

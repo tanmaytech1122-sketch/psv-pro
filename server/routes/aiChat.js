@@ -12,44 +12,47 @@ loadDocuments();
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
+// ── Training-aware system prompt ─────────────────────────────────
 const SYSTEM_PROMPT = `You are a senior process engineer specialised in Pressure Safety Valve (PSV) and Pressure Relief Valve (PRV) design per API 520, API 521, and API 526.
 
 STRICT RULES — follow exactly:
 1. NEVER perform numerical calculations yourself. ALWAYS call the appropriate tool for any calculation. This includes sizing, power, area, flow rate, or any numeric engineering result.
-2. For knowledge questions (standards, theory, definitions, procedures), answer using the CONTEXT section below if provided. If the answer is not in the context, reply: "Not found in provided data."
-3. If a calculation is requested but required inputs are missing, ask ONLY for the specific missing values.
-4. Always state units explicitly in every answer.
-5. Keep answers short, structured, and professional.
-6. Never invent numerical results — all numbers must come from tool responses.`;
+2. For knowledge questions (standards, theory, definitions, procedures), answer using the CONTEXT section below if provided. If the answer is not in the context, reply: "Not found in provided knowledge base. Consider uploading relevant documentation."
+3. If a calculation is requested but required inputs are missing, ask ONLY for the specific missing values — list them by name and unit.
+4. Always state units explicitly in every answer (barg, °C, kg/h, in², etc.).
+5. Keep answers short, structured, and professional. Use bullet points or numbered steps where appropriate.
+6. Never invent numerical results — all numbers must come from tool responses.
+
+TRAINING AWARENESS (for dataset consistency):
+- Structure responses clearly: context → reasoning → conclusion.
+- Prefer grounded answers over guessing. If unsure, say so explicitly.
+- Avoid hallucination: do not cite page numbers, clause numbers, or specific values unless they appear in the CONTEXT section.
+- Responses should be self-contained: a reader without the original query should understand the answer.
+- Use consistent terminology: PSV (Pressure Safety Valve), PRV (Pressure Relief Valve), API 520/521/526.`;
 
 // ── Convert chat history to Gemini format ─────────────────────────
 // Gemini requires: alternating user/model turns, must start with user
 function toGeminiHistory(messages) {
   const history = [];
-
-  // Exclude the last message (current query) and any leading assistant messages
-  const prior = messages.slice(0, -1);
-  let started = false;
+  const prior   = messages.slice(0, -1);
+  let started   = false;
 
   for (const m of prior) {
     const role = m.role === 'assistant' ? 'model' : 'user';
-    // Skip leading model messages — Gemini requires history to start with user
     if (!started && role === 'model') continue;
     started = true;
     history.push({ role, parts: [{ text: m.content || '' }] });
   }
 
-  // Ensure alternating turns — deduplicate consecutive same-role messages
+  // Deduplicate consecutive same-role turns by merging them
   const clean = [];
   for (const turn of history) {
     if (clean.length && clean[clean.length - 1].role === turn.role) {
-      // Merge consecutive same-role into one turn
       clean[clean.length - 1].parts[0].text += '\n' + turn.parts[0].text;
     } else {
       clean.push(turn);
     }
   }
-
   return clean;
 }
 
@@ -66,21 +69,21 @@ function buildSizingCard(toolName, args, result) {
 
   const inp = result.inputs_used || args;
   return {
-    service:           inp.fluid || `${phase} service`,
+    service:              inp.fluid || `${phase} service`,
     phase,
-    scenario:          args.scenario || 'blocked outlet',
-    set_pressure_barg: inp.P_set_barg,
-    flow_kgh:          inp.W_kgh,
-    temp_C:            inp.T_rel_C,
-    MW:                inp.MW,
-    k:                 inp.k,
-    Z:                 inp.Z,
-    A_in2:             result.required_area_in2,
-    orifice:           result.orifice_designation,
-    orifice_area_in2:  result.orifice_area_in2,
+    scenario:             args.scenario || 'blocked outlet',
+    set_pressure_barg:    inp.P_set_barg,
+    flow_kgh:             inp.W_kgh,
+    temp_C:               inp.T_rel_C,
+    MW:                   inp.MW,
+    k:                    inp.k,
+    Z:                    inp.Z,
+    A_in2:                result.required_area_in2,
+    orifice:              result.orifice_designation,
+    orifice_area_in2:     result.orifice_area_in2,
     selected_orifice_size: result.orifice_size,
-    utilisation_pct:   result.utilisation_pct,
-    toolResult:        result,
+    utilisation_pct:      result.utilisation_pct,
+    toolResult:           result,
   };
 }
 
@@ -104,19 +107,27 @@ router.post('/', async (req, res) => {
   console.log(`Query: ${userQuery.substring(0, 120)}`);
 
   try {
-    // ── Retrieve RAG context (local, zero API cost) ──────────────
+    // ── RAG retrieval (local TF-IDF, zero API cost) ───────────────
     const chunks      = retrieveRelevantChunks(userQuery, 3);
     const contextUsed = chunks.length > 0 && chunks[0].score > 0.05;
-    const ragSources  = contextUsed ? chunks.map(c => c.source) : [];
+    const ragSources  = contextUsed ? chunks.map(c => ({
+      source:  c.source,
+      topic:   c.topic,
+      section: c.section,
+      score:   Number(c.score.toFixed(3)),
+    })) : [];
 
     const contextBlock = contextUsed
-      ? `\n\nCONTEXT (from engineering knowledge base — use this for knowledge questions):\n${chunks.map((c, i) => `[${i + 1}] ${c.source}:\n${c.text}`).join('\n\n')}`
+      ? `\n\nCONTEXT (engineering knowledge base — use for knowledge questions only):\n${
+          chunks.map((c, i) =>
+            `[${i + 1}] Topic: ${c.topic}\n    Section: ${c.section}\n    Source: ${c.source}\n\n${c.text}`
+          ).join('\n\n---\n\n')
+        }`
       : '';
 
     const systemWithContext = SYSTEM_PROMPT + contextBlock;
 
-    // ── Single Gemini call with tools + context ───────────────────
-    // Intent is inferred from response: tool call → calculation, text → knowledge
+    // ── Single Gemini call: tools + context injected together ─────
     const model = genAI.getGenerativeModel({
       model: GEMINI_MODEL,
       tools: [{ functionDeclarations }],
@@ -134,7 +145,7 @@ router.post('/', async (req, res) => {
     let sizingCard = null;
     let intent     = 'knowledge';
 
-    // ── Agent loop: handle tool calls ─────────────────────────────
+    // ── Agent loop: execute tool calls until Gemini stops ─────────
     const MAX_TURNS = 3;
     let turns = 0;
 
@@ -161,10 +172,7 @@ router.post('/', async (req, res) => {
         }
 
         functionResponses.push({
-          functionResponse: {
-            name:     call.name,
-            response: toolOutput,
-          },
+          functionResponse: { name: call.name, response: toolOutput },
         });
       }
 
@@ -172,7 +180,7 @@ router.post('/', async (req, res) => {
     }
 
     const reply = result.response.text();
-    console.log(`Reply (intent: ${intent}, tool: ${toolCalled || 'none'}, rag: ${contextUsed})`);
+    console.log(`Reply (intent:${intent} | tool:${toolCalled || 'none'} | rag:${contextUsed})`);
 
     return res.json({
       ok:           true,

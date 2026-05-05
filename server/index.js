@@ -10,10 +10,12 @@ const compression= require('compression');
 const path       = require('path');
 const rateLimit  = require('express-rate-limit');
 
-const sizingRouter   = require('./routes/sizing');
-const projectsRouter = require('./routes/projects');
-const aiChatRouter   = require('./routes/aiChat');
-const reportRouter   = require('./routes/report');
+const sizingRouter       = require('./routes/sizing');
+const projectsRouter     = require('./routes/projects');
+const aiChatRouter       = require('./routes/aiChat');
+const reportRouter       = require('./routes/report');
+const uploadRouter       = require('./routes/upload');
+const exportReportRouter = require('./routes/exportReport');
 
 const app    = express();
 app.set('trust proxy', 1);
@@ -21,7 +23,7 @@ const PORT   = process.env.PORT || 3001;
 const isProd = process.env.NODE_ENV === 'production';
 
 console.log(`🚀 PSV Pro v4.0 — ${isProd ? 'production' : 'development'} mode`);
-console.log(`   GEMINI_API_KEY   : ${process.env.GEMINI_API_KEY   ? '✅' : '❌ missing'}`);
+console.log(`   GEMINI_API_KEY   : ${process.env.GEMINI_API_KEY    ? '✅' : '❌ missing'}`);
 console.log(`   OPENROUTER_KEY   : ${process.env.OPENROUTER_API_KEY ? '✅' : '⚠️  not set (optional)'}`);
 
 // ── Security & middleware ─────────────────────────────────────────
@@ -29,7 +31,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: isProd ? false : ['http://localhost:5000', 'http://localhost:5173'] }));
 app.use(compression());
 app.use(morgan(isProd ? 'combined' : 'dev'));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 // ── Rate limiting ─────────────────────────────────────────────────
@@ -40,21 +42,30 @@ app.use('/api/', rateLimit({
 }));
 
 // ── API routes ────────────────────────────────────────────────────
-app.use('/api/size',     sizingRouter);
-app.use('/api/projects', projectsRouter);
-app.use('/api/ai-chat',  aiChatRouter);
-app.use('/api/report',   reportRouter);
+app.use('/api/size',          sizingRouter);
+app.use('/api/projects',      projectsRouter);
+app.use('/api/ai-chat',       aiChatRouter);
+app.use('/api/report',        reportRouter);
+app.use('/api/upload',        uploadRouter);
+app.use('/api/export-report', exportReportRouter);
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   const PSVApi = require('./engines/psv-engine');
   const suite  = PSVApi.runValidationSuite();
+
+  const { getDatasetStats } = require('./lib/datasetBuilder');
+  const datasetStats = (() => { try { return getDatasetStats(); } catch { return null; } })();
+
   res.json({
     ok: true,
     version: '4.0.0',
-    engine: { tests: suite.pass + '/' + suite.total, pass: suite.fail === 0 },
-    uptime: process.uptime().toFixed(0) + 's',
-    ai: { configured: !!process.env.GEMINI_API_KEY },
+    engine:  { tests: suite.pass + '/' + suite.total, pass: suite.fail === 0 },
+    uptime:  process.uptime().toFixed(0) + 's',
+    ai:      { configured: !!process.env.GEMINI_API_KEY },
+    dataset: datasetStats
+      ? { samples: datasetStats.total, sources: datasetStats.sources }
+      : null,
   });
 });
 

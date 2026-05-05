@@ -24,7 +24,9 @@
     "helmet": "^7.2.0",
     "lowdb": "^3.0.0",
     "morgan": "^1.10.1",
+    "multer": "^2.1.1",
     "node-fetch": "^3.3.2",
+    "pdf-parse": "^2.2.2",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
