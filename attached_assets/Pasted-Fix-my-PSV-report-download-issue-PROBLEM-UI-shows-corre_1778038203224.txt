@@ -1,0 +1,118 @@
+Fix my PSV report download issue.
+
+PROBLEM:
+- UI shows correct PSV sizing data
+- When I click "Download Report", the .docx file is generated
+- But the file opens BLANK or with missing content
+
+GOAL:
+Ensure the generated DOCX report contains ALL data correctly.
+
+================================
+CHECK THESE ISSUES STEP BY STEP
+================================
+
+1. DATA PASSING ISSUE
+- Verify backend is receiving full sizing data
+- Log the data before generating document:
+  console.log("Report Data:", reportData)
+
+- Ensure fields are not undefined:
+  required_area, orifice, pressure, temperature, flow, etc.
+
+--------------------------------
+
+2. DOCX GENERATION LIBRARY FIX
+If using docx / docxtemplater / any library:
+
+- Ensure content is actually added to document
+
+Example (docx library):
+
+const { Document, Packer, Paragraph, TextRun } = require("docx");
+
+const doc = new Document({
+  sections: [
+    {
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun("PSV Sizing Report"),
+          ],
+        }),
+        new Paragraph(`Required Area: ${data.required_area}`),
+        new Paragraph(`Orifice: ${data.orifice}`),
+        new Paragraph(`Pressure: ${data.pressure}`),
+      ],
+    },
+  ],
+});
+
+--------------------------------
+
+3. IMPORTANT: PACKER USAGE
+Make sure you are NOT returning empty buffer
+
+WRONG:
+res.send(doc)
+
+CORRECT:
+const buffer = await Packer.toBuffer(doc);
+res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+res.setHeader("Content-Disposition", "attachment; filename=psv-report.docx");
+res.send(buffer);
+
+--------------------------------
+
+4. ASYNC ISSUE (VERY COMMON BUG)
+Ensure await is used:
+
+const buffer = await Packer.toBuffer(doc);
+
+If not awaited → blank file
+
+--------------------------------
+
+5. FRONTEND DOWNLOAD FIX
+
+Ensure frontend handles blob correctly:
+
+const response = await fetch("/api/download-report");
+const blob = await response.blob();
+
+const url = window.URL.createObjectURL(blob);
+const a = document.createElement("a");
+a.href = url;
+a.download = "psv-report.docx";
+a.click();
+
+--------------------------------
+
+6. DEBUG STEP (VERY IMPORTANT)
+
+Before generating doc:
+console.log(JSON.stringify(data, null, 2));
+
+If this is empty → problem is earlier (API/data flow)
+
+--------------------------------
+
+7. FALLBACK TEST
+
+Temporarily hardcode data:
+
+new Paragraph("Test Report Working")
+
+If still blank → library/config issue
+If works → data binding issue
+
+================================
+EXPECTED RESULT
+================================
+- DOCX opens with full PSV data
+- No blank pages
+- Proper formatted engineering report
+
+Do NOT change UI.
+Fix only backend report generation + data binding.
+Show exact changes in code.

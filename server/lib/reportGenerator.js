@@ -3,312 +3,251 @@
 const {
   Document, Paragraph, Table, TableRow, TableCell,
   TextRun, AlignmentType, WidthType, BorderStyle,
-  Packer, ShadingType, VerticalAlign, TableLayoutType,
+  Packer, ShadingType, VerticalAlign,
   Footer, PageNumber,
 } = require('docx');
 
+// ── Page geometry (A4, margins 900 twips each side) ───────────────
+// Usable width ≈ 11906 - 1800 = 10106 twips
+const PAGE_W  = 10106;   // usable width in twips
+const COL1    = Math.round(PAGE_W * 0.38);   // label column  ≈ 3840
+const COL2    = PAGE_W - COL1;               // value column  ≈ 6266
+
 // ── Colour palette ────────────────────────────────────────────────
 const C = {
-  navyDark:  '0D2B4E',  // title block bg
-  navy:      '1E3A5F',  // section header bg, outer borders
-  navyMid:   '2B5278',  // sub-header text
-  navyLight: 'D6E4F0',  // section header label cell bg
-  rowEven:   'EEF4FA',  // alternating row
-  rowOdd:    'FFFFFF',  // alternating row
-  rowResult: 'E3F2E8',  // highlight: calculation result
-  silver:    'C8D6E3',  // inner border
+  navyDark:  '0D2B4E',
+  navy:      '1E3A5F',
+  navyMid:   '2B5278',
+  navyLight: 'D6E4F0',
+  rowEven:   'EEF4FA',
+  rowOdd:    'FFFFFF',
+  rowResult: 'E3F2E8',
+  silver:    'C8D6E3',
   white:     'FFFFFF',
   textMain:  '1A1A1A',
   textMuted: '555555',
-  textLight: 'AAAAAA',
-  warn:      'FFF3CD',  // disclaimer bg
+  textLight: '888888',
+  warn:      'FFF3CD',
   warnBorder:'C8972A',
 };
 
-// ── Border presets ────────────────────────────────────────────────
-function outerBorder() {
-  const b = { style: BorderStyle.SINGLE, size: 8, color: C.navy };
+// ── Border helpers ─────────────────────────────────────────────────
+const mkBorder = (color, size = 4) => ({ style: BorderStyle.SINGLE, size, color });
+const noBorder = () => ({ style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
+
+function outerBorders(color = C.navy, size = 8) {
+  const b = mkBorder(color, size);
   return { top: b, bottom: b, left: b, right: b };
 }
-function innerBorder() {
-  const b = { style: BorderStyle.SINGLE, size: 2, color: C.silver };
+function innerBorders() {
+  const b = mkBorder(C.silver, 2);
   return { top: b, bottom: b, left: b, right: b };
 }
-function noBorder() {
-  const b = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
-  return { top: b, bottom: b, left: b, right: b };
+function noBorders() {
+  const n = noBorder();
+  return { top: n, bottom: n, left: n, right: n };
 }
 
-// ── Empty spacer paragraph ────────────────────────────────────────
+// ── Spacer paragraph ──────────────────────────────────────────────
 function spacer(pt = 120) {
   return new Paragraph({ children: [], spacing: { before: 0, after: pt } });
 }
 
-// ── Section heading row (full-width shaded label across table) ─────
-function sectionHeaderRow(label, colSpan = 2) {
+// ── Section heading row ───────────────────────────────────────────
+function sectionHeaderRow(label) {
   return new TableRow({
-    children: [
-      new TableCell({
-        columnSpan: colSpan,
-        borders: outerBorder(),
-        shading: { type: ShadingType.CLEAR, color: 'auto', fill: C.navy },
-        children: [new Paragraph({
-          children: [new TextRun({
-            text: label.toUpperCase(),
-            bold: true, size: 22, color: C.white, font: 'Calibri',
-          })],
-          alignment: AlignmentType.LEFT,
-          spacing: { before: 80, after: 80 },
-          indent: { left: 100 },
+    children: [new TableCell({
+      columnSpan: 2,
+      width: { size: PAGE_W, type: WidthType.DXA },
+      borders: outerBorders(C.navy, 6),
+      shading: { type: ShadingType.CLEAR, fill: C.navy, color: 'auto' },
+      children: [new Paragraph({
+        children: [new TextRun({
+          text: label.toUpperCase(),
+          bold: true, size: 22, color: C.white, font: 'Calibri',
         })],
-      }),
-    ],
+        spacing: { before: 80, after: 80 },
+        indent: { left: 100 },
+      })],
+    })],
   });
 }
 
-// ── Column header row for a table (label | value) ─────────────────
+// ── Column header row ─────────────────────────────────────────────
 function columnHeaderRow(col1 = 'PARAMETER', col2 = 'VALUE') {
-  return new TableRow({
-    children: [
-      new TableCell({
-        width: { size: 38, type: WidthType.PERCENTAGE },
-        borders: innerBorder(),
-        shading: { type: ShadingType.CLEAR, color: 'auto', fill: C.navyLight },
-        children: [new Paragraph({
-          children: [new TextRun({ text: col1, bold: true, size: 18, color: C.navyMid, font: 'Calibri' })],
-          spacing: { before: 60, after: 60 },
-          indent: { left: 80 },
-        })],
-      }),
-      new TableCell({
-        width: { size: 62, type: WidthType.PERCENTAGE },
-        borders: innerBorder(),
-        shading: { type: ShadingType.CLEAR, color: 'auto', fill: C.navyLight },
-        children: [new Paragraph({
-          children: [new TextRun({ text: col2, bold: true, size: 18, color: C.navyMid, font: 'Calibri' })],
-          spacing: { before: 60, after: 60 },
-          indent: { left: 80 },
-        })],
-      }),
-    ],
+  const cell = (text, w) => new TableCell({
+    width: { size: w, type: WidthType.DXA },
+    borders: innerBorders(),
+    shading: { type: ShadingType.CLEAR, fill: C.navyLight, color: 'auto' },
+    children: [new Paragraph({
+      children: [new TextRun({ text, bold: true, size: 18, color: C.navyMid, font: 'Calibri' })],
+      spacing: { before: 60, after: 60 },
+      indent: { left: 80 },
+    })],
   });
+  return new TableRow({ children: [cell(col1, COL1), cell(col2, COL2)] });
 }
 
-// ── Data row (label | value) with optional highlight ──────────────
+// ── Data row ──────────────────────────────────────────────────────
 function dataRow(label, value, opts = {}) {
-  const {
-    index   = 0,
-    bold    = false,
-    highlight = false,
-    labelColor,
-    valueColor,
-  } = opts;
+  const { index = 0, bold = false, highlight = false } = opts;
+  const fill = highlight ? C.rowResult : (index % 2 === 0 ? C.rowEven : C.rowOdd);
 
-  const fillLabel  = highlight ? C.rowResult : (index % 2 === 0 ? C.rowEven : C.rowOdd);
-  const fillValue  = highlight ? C.rowResult : (index % 2 === 0 ? C.rowEven : C.rowOdd);
-
-  return new TableRow({
-    children: [
-      new TableCell({
-        width: { size: 38, type: WidthType.PERCENTAGE },
-        borders: innerBorder(),
-        verticalAlign: VerticalAlign.CENTER,
-        shading: { type: ShadingType.CLEAR, color: 'auto', fill: fillLabel },
-        children: [new Paragraph({
-          children: [new TextRun({
-            text: String(label ?? ''),
-            bold: true,
-            size: 20,
-            font: 'Calibri',
-            color: labelColor || C.textMain,
-          })],
-          spacing: { before: 70, after: 70 },
-          indent: { left: 100 },
-        })],
-      }),
-      new TableCell({
-        width: { size: 62, type: WidthType.PERCENTAGE },
-        borders: innerBorder(),
-        verticalAlign: VerticalAlign.CENTER,
-        shading: { type: ShadingType.CLEAR, color: 'auto', fill: fillValue },
-        children: [new Paragraph({
-          children: [new TextRun({
-            text: String(value ?? '—'),
-            bold,
-            size: 20,
-            font: 'Calibri',
-            color: valueColor || C.textMain,
-          })],
-          spacing: { before: 70, after: 70 },
-          indent: { left: 100 },
-        })],
-      }),
-    ],
+  const makeCell = (text, w, isValue) => new TableCell({
+    width: { size: w, type: WidthType.DXA },
+    borders: innerBorders(),
+    verticalAlign: VerticalAlign.CENTER,
+    shading: { type: ShadingType.CLEAR, fill, color: 'auto' },
+    children: [new Paragraph({
+      children: [new TextRun({
+        text: String(text ?? '—'),
+        bold: isValue ? bold : true,
+        size: 20,
+        font: 'Calibri',
+        color: C.textMain,
+      })],
+      spacing: { before: 70, after: 70 },
+      indent: { left: 100 },
+    })],
   });
+
+  return new TableRow({ children: [makeCell(label, COL1, false), makeCell(value, COL2, true)] });
 }
 
-// ── Build a full section table: header + column labels + rows ──────
-function sectionTable(sectionLabel, rows, opts = {}) {
+// ── Section table: header row + column headers + data rows ─────────
+function sectionTable(heading, rows, opts = {}) {
   const { showColumnHeaders = true, highlight = [] } = opts;
-  const tableRows = [sectionHeaderRow(sectionLabel)];
-  if (showColumnHeaders) tableRows.push(columnHeaderRow('PARAMETER', 'VALUE'));
+  const tableRows = [sectionHeaderRow(heading)];
+  if (showColumnHeaders) tableRows.push(columnHeaderRow());
 
   rows.forEach(([label, value], i) => {
+    if (value == null || value === '') return;
     tableRows.push(dataRow(label, value, {
       index: i,
       highlight: highlight.includes(i),
-      bold: highlight.includes(i),
+      bold:      highlight.includes(i),
     }));
   });
 
   return new Table({
-    layout: TableLayoutType.FIXED,
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: outerBorder(),
+    width: { size: PAGE_W, type: WidthType.DXA },
+    columnWidths: [COL1, COL2],
+    borders: outerBorders(C.navy, 8),
     rows: tableRows,
   });
 }
 
-// ── Title block: dark banner ───────────────────────────────────────
+// ── Title block ───────────────────────────────────────────────────
 function buildTitleBlock(service, date, docRef) {
-  // Outer navy-background table (1 col x 2 rows)
   return new Table({
-    layout: TableLayoutType.FIXED,
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: {
-      top:    { style: BorderStyle.SINGLE, size: 12, color: C.navyDark },
-      bottom: { style: BorderStyle.SINGLE, size: 12, color: C.navyDark },
-      left:   { style: BorderStyle.SINGLE, size: 12, color: C.navyDark },
-      right:  { style: BorderStyle.SINGLE, size: 12, color: C.navyDark },
-    },
+    width: { size: PAGE_W, type: WidthType.DXA },
+    columnWidths: [PAGE_W],
+    borders: outerBorders(C.navyDark, 12),
     rows: [
-      // Row 1: main title
+      // Main title row
       new TableRow({
-        children: [
-          new TableCell({
-            borders: noBorder(),
-            shading: { type: ShadingType.CLEAR, color: 'auto', fill: C.navyDark },
-            children: [
-              new Paragraph({
-                children: [
-                  new TextRun({ text: 'PSV SIZING REPORT', bold: true, size: 52, color: C.white, font: 'Calibri' }),
-                ],
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 160, after: 40 },
-              }),
-            ],
-          }),
-        ],
+        children: [new TableCell({
+          width: { size: PAGE_W, type: WidthType.DXA },
+          borders: noBorders(),
+          shading: { type: ShadingType.CLEAR, fill: C.navyDark, color: 'auto' },
+          children: [new Paragraph({
+            children: [new TextRun({
+              text: 'PSV SIZING REPORT',
+              bold: true, size: 52, color: C.white, font: 'Calibri',
+            })],
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 180, after: 60 },
+          })],
+        })],
       }),
-      // Row 2: subtitle strip
+      // Subtitle strip
       new TableRow({
-        children: [
-          new TableCell({
-            borders: noBorder(),
-            shading: { type: ShadingType.CLEAR, color: 'auto', fill: C.navy },
+        children: [new TableCell({
+          width: { size: PAGE_W, type: WidthType.DXA },
+          borders: noBorders(),
+          shading: { type: ShadingType.CLEAR, fill: C.navy, color: 'auto' },
+          children: [new Paragraph({
             children: [
-              new Paragraph({
-                children: [
-                  new TextRun({ text: service, italics: true, size: 24, color: 'A8C8E8', font: 'Calibri' }),
-                  new TextRun({ text: '   |   ', size: 22, color: '6699BB', font: 'Calibri' }),
-                  new TextRun({ text: date, size: 22, color: 'A8C8E8', font: 'Calibri' }),
-                  ...(docRef ? [
-                    new TextRun({ text: '   |   ', size: 22, color: '6699BB', font: 'Calibri' }),
-                    new TextRun({ text: docRef, size: 22, color: 'A8C8E8', font: 'Calibri' }),
-                  ] : []),
-                ],
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 60, after: 120 },
-              }),
+              new TextRun({ text: service, italics: true, size: 24, color: 'A8C8E8', font: 'Calibri' }),
+              new TextRun({ text: '     |     ', size: 22, color: '4A7090', font: 'Calibri' }),
+              new TextRun({ text: `Generated: ${date}`, size: 22, color: 'A8C8E8', font: 'Calibri' }),
+              ...(docRef ? [
+                new TextRun({ text: '     |     ', size: 22, color: '4A7090', font: 'Calibri' }),
+                new TextRun({ text: docRef, size: 22, color: 'A8C8E8', font: 'Calibri' }),
+              ] : []),
             ],
-          }),
-        ],
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 60, after: 140 },
+          })],
+        })],
       }),
     ],
-  });
-}
-
-// ── Assumptions section as table with assumption items ────────────
-function buildAssumptionsTable(items) {
-  const header = sectionHeaderRow('4.0  Assumptions & Design Basis');
-  const colHdr = columnHeaderRow('ASSUMPTION', 'VALUE / COMMENT');
-
-  const rows = items
-    .filter(([, v]) => v != null && v !== '' && v !== '—')
-    .map(([label, value], i) => dataRow(label, value, { index: i }));
-
-  if (!rows.length) return null;
-
-  return new Table({
-    layout: TableLayoutType.FIXED,
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: outerBorder(),
-    rows: [header, colHdr, ...rows],
   });
 }
 
 // ── Disclaimer box ─────────────────────────────────────────────────
 function buildDisclaimer() {
   return new Table({
-    layout: TableLayoutType.FIXED,
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: {
-      top:    { style: BorderStyle.SINGLE, size: 6, color: C.warnBorder },
-      bottom: { style: BorderStyle.SINGLE, size: 6, color: C.warnBorder },
-      left:   { style: BorderStyle.SINGLE, size: 6, color: C.warnBorder },
-      right:  { style: BorderStyle.SINGLE, size: 6, color: C.warnBorder },
-    },
-    rows: [
-      new TableRow({
-        children: [
-          new TableCell({
-            borders: noBorder(),
-            shading: { type: ShadingType.CLEAR, color: 'auto', fill: C.warn },
-            children: [
-              new Paragraph({
-                children: [
-                  new TextRun({ text: '⚠  DISCLAIMER  ', bold: true, size: 20, font: 'Calibri', color: '7B5800' }),
-                  new TextRun({
-                    text: 'This report is generated by PSV Pro v4.0 for engineering reference purposes only. '
-                        + 'All calculations are based on API 520 / API 521 methodologies. '
-                        + 'Results MUST be reviewed and verified by a qualified process or mechanical engineer '
-                        + 'before implementation. The software author accepts no liability for errors or omissions.',
-                    size: 18, font: 'Calibri', color: '7B5800',
-                  }),
-                ],
-                alignment: AlignmentType.LEFT,
-                spacing: { before: 100, after: 100 },
-                indent: { left: 120, right: 120 },
-              }),
-            ],
-          }),
-        ],
-      }),
-    ],
+    width: { size: PAGE_W, type: WidthType.DXA },
+    columnWidths: [PAGE_W],
+    borders: outerBorders(C.warnBorder, 6),
+    rows: [new TableRow({
+      children: [new TableCell({
+        width: { size: PAGE_W, type: WidthType.DXA },
+        borders: noBorders(),
+        shading: { type: ShadingType.CLEAR, fill: C.warn, color: 'auto' },
+        children: [new Paragraph({
+          children: [
+            new TextRun({ text: 'DISCLAIMER  ', bold: true, size: 19, font: 'Calibri', color: '7B5800' }),
+            new TextRun({
+              text: 'This report is generated by PSV Pro v4.0 for engineering reference only. '
+                  + 'All calculations follow API 520 / API 521 methodology. '
+                  + 'Results MUST be reviewed by a qualified process or mechanical engineer before implementation. '
+                  + 'The author accepts no liability for errors or omissions.',
+              size: 18, font: 'Calibri', color: '7B5800',
+            }),
+          ],
+          spacing: { before: 100, after: 100 },
+          indent: { left: 120, right: 120 },
+        })],
+      })],
+    })],
   });
 }
 
 // ── Footer ─────────────────────────────────────────────────────────
 function buildFooter(date) {
   return new Footer({
-    children: [
-      new Paragraph({
-        children: [
-          new TextRun({ text: `PSV Pro v4.0  |  Generated: ${date}  |  Page `, size: 16, color: C.textLight, font: 'Calibri' }),
-          new TextRun({ children: [PageNumber.CURRENT], size: 16, color: C.textLight, font: 'Calibri' }),
-          new TextRun({ text: ' of ', size: 16, color: C.textLight, font: 'Calibri' }),
-          new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 16, color: C.textLight, font: 'Calibri' }),
-          new TextRun({ text: '  |  ENGINEERING DOCUMENT — NOT FOR CONSTRUCTION WITHOUT AUTHORISATION', size: 16, color: C.textLight, font: 'Calibri' }),
-        ],
-        alignment: AlignmentType.CENTER,
-        border: { top: { style: BorderStyle.SINGLE, size: 2, color: C.silver } },
-      }),
-    ],
+    children: [new Paragraph({
+      children: [
+        new TextRun({ text: `PSV Pro v4.0  |  ${date}  |  Page `, size: 16, color: C.textLight, font: 'Calibri' }),
+        new TextRun({ children: [PageNumber.CURRENT], size: 16, color: C.textLight, font: 'Calibri' }),
+        new TextRun({ text: ' of ', size: 16, color: C.textLight, font: 'Calibri' }),
+        new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 16, color: C.textLight, font: 'Calibri' }),
+        new TextRun({ text: '  |  FOR ENGINEERING REFERENCE ONLY', size: 16, color: C.textLight, font: 'Calibri' }),
+      ],
+      alignment: AlignmentType.CENTER,
+      border: { top: { style: BorderStyle.SINGLE, size: 2, color: C.silver } },
+    })],
   });
 }
 
-// ── Main generator ────────────────────────────────────────────────
+// ── Main generator ─────────────────────────────────────────────────
 async function generateReport(data) {
+  console.log('[report] incoming data keys:', Object.keys(data));
+  console.log('[report] key values:', {
+    service:         data.service,
+    fluid:           data.fluid,
+    phase:           data.phase,
+    P_set_barg:      data.P_set_barg,
+    T_rel_C:         data.T_rel_C,
+    W_kgh:           data.W_kgh,
+    A_in2:           data.A_in2,
+    orifice:         data.orifice,
+    orifice_area_in2: data.orifice_area_in2,
+    utilisation_pct: data.utilisation_pct,
+  });
+
   const {
     fluid            = 'Not specified',
     service          = 'PSV Sizing',
@@ -335,123 +274,109 @@ async function generateReport(data) {
     toolResult       = {},
   } = data;
 
-  // ── Derived values ───────────────────────────────────────────────
-  const areaIn2Display  = A_in2 != null
-    ? `${Number(A_in2).toFixed(4)} in²   (${(Number(A_in2) * 6.4516).toFixed(3)} cm²)`
+  // ── Derived display strings ───────────────────────────────────────
+  const fmt = (v, unit = '') => v != null ? `${v}${unit}` : '—';
+  const fmtArea = (v) => v != null
+    ? `${Number(v).toFixed(4)} in²   (${(Number(v) * 6.4516).toFixed(3)} cm²)`
     : '—';
 
-  const orificeAreaDisp = orifice_area_in2 != null
-    ? `${Number(orifice_area_in2).toFixed(4)} in²   (${(Number(orifice_area_in2) * 6.4516).toFixed(3)} cm²)`
+  const phaseLabel  = { gas:'Gas / Vapour', steam:'Steam', liquid:'Liquid',
+                        fire:'Fire Case', twophase:'Two-Phase' }[phase] || phase;
+  const utilStatus  = utilisation_pct != null
+    ? (Number(utilisation_pct) > 100 ? 'OVERSIZE — Select Larger Orifice'
+    : Number(utilisation_pct) > 90   ? `${Number(utilisation_pct).toFixed(1)}%  (High — Verify With Supplier)`
+    :                                   `${Number(utilisation_pct).toFixed(1)}%  (Acceptable)`)
     : '—';
 
-  const utilDisp = utilisation_pct != null
-    ? `${Number(utilisation_pct).toFixed(1)}%`
-    : '—';
+  const relievingP = toolResult.relieving_pressure_barg != null
+    ? `${toolResult.relieving_pressure_barg} barg`
+    : P_rel_barg != null ? `${P_rel_barg} barg` : '—';
 
-  const phaseLabel = (phase || 'gas').charAt(0).toUpperCase() + (phase || 'gas').slice(1);
-
-  // ── Default assumptions if none provided ────────────────────────
-  const assumptionItems = [
-    ['Molecular Weight (MW)',          MW != null ? `${MW} kg/kmol` : '—'],
-    ['Cp/Cv Ratio (k)',                k  != null ? String(k) : '—'],
-    ['Compressibility Factor (Z)',     Z  != null ? String(Z) : '—'],
-    ['Discharge Coefficient (Kd)',     toolResult.Kd != null ? String(toolResult.Kd) : '0.975 (API 520 default)'],
-    ['Back Pressure Correction (Kb)',  toolResult.Kb != null ? String(toolResult.Kb) : '1.0 (assumed conventional valve)'],
-    ['Overpressure Allowance',         '10% of set pressure (single device, API 520 §3.2)'],
-    ['Relieving Temperature',          T_rel_C != null ? `${T_rel_C} °C (as specified)` : 'Design temperature'],
-    ['Additional Notes',               notes || assumptions || 'None'],
-  ];
-
-  // ── Build document ───────────────────────────────────────────────
+  // ── Assemble document children ────────────────────────────────────
   const children = [];
 
-  // 1. Title block
+  // Title
   children.push(buildTitleBlock(service, date, docRef));
-  children.push(spacer(200));
+  children.push(spacer(240));
 
-  // 2. Section 1 — Document Information
+  // Section 1 — Document Information
   children.push(sectionTable('1.0  Document Information', [
-    ['Standard',            standard],
-    ['Prepared By',         preparedBy],
-    ['Report Date',         date],
-    ['Service Description', service],
-    ['Relief Scenario',     scenario],
-    ['Document Reference',  docRef || 'N/A'],
+    ['Standard / Code',       standard],
+    ['Prepared By',           preparedBy],
+    ['Report Date',           date],
+    ['Service / Fluid',       service],
+    ['Relief Scenario',       scenario],
+    ['Document Reference',    docRef || 'N/A'],
   ]));
-  children.push(spacer(200));
+  children.push(spacer(240));
 
-  // 3. Section 2 — Process Conditions
-  children.push(sectionTable('2.0  Process Conditions', [
-    ['Fluid / Medium',          fluid],
-    ['Phase',                   phaseLabel],
-    ['Set Pressure',            P_set_barg  != null ? `${P_set_barg} barg` : '—'],
-    ['Relieving Pressure',      toolResult.relieving_pressure_barg != null
-                                  ? `${toolResult.relieving_pressure_barg} barg`
-                                  : P_rel_barg != null ? `${P_rel_barg} barg` : '—'],
-    ['Relieving Temperature',   T_rel_C     != null ? `${T_rel_C} °C`   : '—'],
-    ['Required Relief Flow',    W_kgh       != null ? `${Number(W_kgh).toLocaleString()} kg/h` : '—'],
-    ...(toolResult.flow_regime
-      ? [['Flow Regime', toolResult.flow_regime]]
-      : []),
-    ...(toolResult.heat_input_kW != null
-      ? [['Fire Heat Input', `${toolResult.heat_input_kW.toLocaleString()} kW   (${Number(toolResult.heat_input_BTUhr || 0).toLocaleString()} BTU/h)`]]
-      : []),
-    ...(toolResult.wetted_area_ft2 != null
-      ? [['Wetted Surface Area', `${toolResult.wetted_area_ft2} ft²`]]
-      : []),
-  ]));
-  children.push(spacer(200));
-
-  // 4. Section 3 — Calculation Results (highlight key rows)
-  const resultRows = [
-    ['Required Orifice Area',       areaIn2Display],
-    ['Selected API 526 Orifice',    orifice || '—'],
-    ['Selected Orifice Area',       orificeAreaDisp],
-    ['Orifice Size (inlet × outlet)', orifice_size || '—'],
-    ['Capacity Utilisation',        utilDisp],
-    ...(toolResult.Kb != null
-      ? [['Back Pressure Correction (Kb)', String(toolResult.Kb)]]
-      : []),
+  // Section 2 — Process Conditions
+  const processRows = [
+    ['Fluid / Medium',        fluid || service],
+    ['Phase',                 phaseLabel],
+    ['Set Pressure',          fmt(P_set_barg, ' barg')],
+    ['Relieving Pressure',    relievingP],
+    ['Relieving Temperature', fmt(T_rel_C, ' °C')],
+    ['Required Relief Flow',  W_kgh != null ? `${Number(W_kgh).toLocaleString()} kg/h` : '—'],
   ];
+  if (toolResult.flow_regime)
+    processRows.push(['Flow Regime', toolResult.flow_regime]);
+  if (toolResult.heat_input_kW != null)
+    processRows.push(['Fire Heat Input', `${toolResult.heat_input_kW} kW`]);
+  if (toolResult.wetted_area_ft2 != null)
+    processRows.push(['Wetted Surface Area', `${toolResult.wetted_area_ft2} ft²`]);
 
-  // Highlight rows 1 and 4 (orifice selection + utilisation)
-  children.push(sectionTable('3.0  Calculation Results  (API 520)', resultRows, {
-    highlight: [1, 4],
-  }));
-  children.push(spacer(200));
+  children.push(sectionTable('2.0  Process Conditions', processRows));
+  children.push(spacer(240));
 
-  // 5. Section 4 — Assumptions
-  const assumTable = buildAssumptionsTable(assumptionItems);
-  if (assumTable) {
-    children.push(assumTable);
-    children.push(spacer(200));
-  }
+  // Section 3 — Calculation Results
+  children.push(sectionTable('3.0  Calculation Results  (API 520 / API 526)', [
+    ['Required Orifice Area',          fmtArea(A_in2)],
+    ['Selected API 526 Orifice',       orifice || '—'],
+    ['Selected Orifice Area',          fmtArea(orifice_area_in2)],
+    ['Orifice Size (inlet × outlet)',  orifice_size || '—'],
+    ['Capacity Utilisation',           utilStatus],
+    ['Back Pressure Correction (Kb)',  toolResult.Kb != null ? String(toolResult.Kb) : '1.000'],
+    ['Discharge Coefficient (Kd)',     toolResult.Kd != null ? String(toolResult.Kd) : '0.975'],
+  ], { highlight: [1, 4] }));
+  children.push(spacer(240));
 
-  // 6. Section 5 — Disclaimer
+  // Section 4 — Design Assumptions
+  const assumRows = [
+    ['Molecular Weight (MW)',         MW  != null ? `${MW} kg/kmol` : '—'],
+    ['Cp/Cv Ratio (k)',               k   != null ? String(k) : '—'],
+    ['Compressibility Factor (Z)',    Z   != null ? String(Z) : '—'],
+    ['Overpressure Allowance',        '10% of set pressure (single device, API 520 §3.2)'],
+    ['Valve Type',                    toolResult.inputs_used?.valve_type || 'Conventional'],
+    ['Additional Notes',              notes || assumptions || 'None'],
+  ];
+  children.push(sectionTable('4.0  Design Assumptions', assumRows));
+  children.push(spacer(240));
+
+  // Section 5 — Sign-Off
   children.push(sectionTable('5.0  Verification & Sign-Off', [
-    ['Calculated By',    ''],
-    ['Reviewed By',      ''],
-    ['Approved By',      ''],
-    ['Revision',         'Rev 0'],
-    ['Status',           'ISSUED FOR REVIEW'],
+    ['Calculated By',  ''],
+    ['Reviewed By',    ''],
+    ['Approved By',    ''],
+    ['Revision',       'Rev 0'],
+    ['Status',         'ISSUED FOR REVIEW'],
   ], { showColumnHeaders: false }));
-  children.push(spacer(200));
+  children.push(spacer(240));
 
+  // Disclaimer
   children.push(buildDisclaimer());
 
-  // ── Assemble document ────────────────────────────────────────────
+  // ── Build Document ────────────────────────────────────────────────
   const doc = new Document({
     styles: {
       default: {
-        document: {
-          run: { font: 'Calibri', size: 20, color: C.textMain },
-        },
+        document: { run: { font: 'Calibri', size: 20, color: C.textMain } },
       },
     },
     sections: [{
       properties: {
         page: {
-          margin: { top: 720, bottom: 720, left: 900, right: 900 }, // ~1.25 cm margins
+          margin: { top: 720, bottom: 720, left: 900, right: 900 },
         },
       },
       footers: { default: buildFooter(date) },
@@ -459,7 +384,9 @@ async function generateReport(data) {
     }],
   });
 
-  return Packer.toBuffer(doc);
+  const buffer = await Packer.toBuffer(doc);
+  console.log(`[report] generated ${buffer.length} bytes`);
+  return buffer;
 }
 
 module.exports = { generateReport };
