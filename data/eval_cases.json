@@ -1,0 +1,156 @@
+[
+  {
+    "id": "K001",
+    "category": "knowledge",
+    "question": "What is PSV chattering and what are its main causes?",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["chattering", "simmer", "blowdown", "pressure drop", "inlet"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "K002",
+    "category": "knowledge",
+    "question": "Explain the back pressure correction factor Kb in API 520 and when it must be applied.",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["Kb", "back pressure", "bellows", "conventional"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "K003",
+    "category": "knowledge",
+    "question": "What is the difference between a conventional spring-loaded PSV and a balanced bellows PSV?",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["conventional", "bellows", "back pressure", "spring"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "K004",
+    "category": "knowledge",
+    "question": "Describe the external fire case sizing scenario per API 521 Section 5.15.",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["API 521", "fire", "wetted", "heat", "latent"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "K005",
+    "category": "knowledge",
+    "question": "What is the relieving pressure of a PSV and how does it differ from the set pressure?",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["relieving pressure", "set pressure", "overpressure", "10%"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "C001",
+    "category": "calculation",
+    "question": "Size a PSV for propane gas: set pressure 10 barg, relieving temperature 50°C, relief flow 5000 kg/h, molecular weight 44 kg/kmol, k ratio 1.14.",
+    "expected": {
+      "intent": "calculation",
+      "tool": "size_psv_gas",
+      "key_terms": ["orifice", "area", "required"],
+      "context_required": false,
+      "numeric_checks": [
+        { "field": "required_area_in2", "value": 0.6946, "tolerance_pct": 5 }
+      ]
+    }
+  },
+  {
+    "id": "C002",
+    "category": "calculation",
+    "question": "Size a steam PSV: set pressure 8 barg, steam temperature 150°C, relief flow 5000 kg/h.",
+    "expected": {
+      "intent": "calculation",
+      "tool": "size_psv_steam",
+      "key_terms": ["orifice", "area", "steam"],
+      "context_required": false,
+      "numeric_checks": [
+        { "field": "required_area_in2", "value": 1.5439, "tolerance_pct": 5 }
+      ]
+    }
+  },
+  {
+    "id": "C003",
+    "category": "calculation",
+    "question": "Calculate the hydraulic power for a centrifugal pump handling 200 m³/h of water with a total head of 40 m.",
+    "expected": {
+      "intent": "calculation",
+      "tool": "calculate_hydraulic_power",
+      "key_terms": ["kW", "power", "hydraulic"],
+      "context_required": false,
+      "numeric_checks": [
+        { "field": "power_kW", "value": 21.8, "tolerance_pct": 5 }
+      ]
+    }
+  },
+  {
+    "id": "C004",
+    "category": "calculation",
+    "question": "Size a liquid relief valve: set pressure 6 barg, relief flow 2000 kg/h, fluid is water with density 998 kg/m³.",
+    "expected": {
+      "intent": "calculation",
+      "tool": "size_psv_liquid",
+      "key_terms": ["orifice", "area", "liquid"],
+      "context_required": false,
+      "numeric_checks": []
+    }
+  },
+  {
+    "id": "C005",
+    "category": "calculation",
+    "question": "Size a fire case PSV: set pressure 10 barg, vessel diameter 2 m, vessel length 6 m, latent heat 300 kJ/kg, relieving temperature 80°C, molecular weight 44, k 1.14.",
+    "expected": {
+      "intent": "calculation",
+      "tool": "size_psv_fire",
+      "key_terms": ["orifice", "area", "fire"],
+      "context_required": false,
+      "numeric_checks": []
+    }
+  },
+  {
+    "id": "R001",
+    "category": "reasoning",
+    "question": "Why should a balanced bellows PSV be selected when the superimposed back pressure exceeds 10% of the set pressure?",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["back pressure", "bellows", "conventional", "balanced"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "R002",
+    "category": "reasoning",
+    "question": "What engineering factors should be considered when selecting the final PSV orifice size beyond the minimum calculated area?",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["orifice", "API 526", "utilisation", "capacity"],
+      "context_required": true
+    }
+  },
+  {
+    "id": "R003",
+    "category": "reasoning",
+    "question": "How does excessive inlet pressure drop affect PSV performance, and what is the limit recommended by API 520?",
+    "expected": {
+      "intent": "knowledge",
+      "tool": null,
+      "key_terms": ["inlet", "pressure drop", "3%", "chattering"],
+      "context_required": true
+    }
+  }
+]

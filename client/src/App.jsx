@@ -16,7 +16,8 @@ import ProjectsPage     from './components/projects/ProjectsPage'
 import RegisterPage     from './components/projects/RegisterPage'
 import SettingsPage     from './components/layout/SettingsPage'
 import PlaceholderPage  from './components/layout/PlaceholderPage'
-import AIQuery          from './components/ai/AIQuery'  // NEW
+import AIQuery          from './components/ai/AIQuery'
+import EvalPage         from './pages/EvalPage'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
@@ -58,7 +59,8 @@ export default function App() {
           <Route path="/projects"         element={<Layout><ProjectsPage/></Layout>}/>
           <Route path="/register"         element={<Layout><RegisterPage/></Layout>}/>
           <Route path="/settings"         element={<Layout><SettingsPage/></Layout>}/>
-          <Route path="/ai"               element={<Layout><AIQuery/></Layout>}/>  {/* NEW */}
+          <Route path="/ai"               element={<Layout><AIQuery/></Layout>}/>
+          <Route path="/eval"             element={<Layout><EvalPage/></Layout>}/>
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

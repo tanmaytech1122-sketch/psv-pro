@@ -16,6 +16,7 @@ const aiChatRouter       = require('./routes/aiChat');
 const reportRouter       = require('./routes/report');
 const uploadRouter       = require('./routes/upload');
 const exportReportRouter = require('./routes/exportReport');
+const evalRouter         = require('./routes/eval');
 
 const app    = express();
 app.set('trust proxy', 1);
@@ -48,6 +49,7 @@ app.use('/api/ai-chat',       aiChatRouter);
 app.use('/api/report',        reportRouter);
 app.use('/api/upload',        uploadRouter);
 app.use('/api/export-report', exportReportRouter);
+app.use('/api/eval',         evalRouter);
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {

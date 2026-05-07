@@ -3,7 +3,7 @@ import {
   Gauge, Thermometer, Droplets, Layers, Flame,
   Wind, Pipette, Activity, BarChart2, BookOpen,
   Settings, ChevronLeft, ChevronRight, FolderOpen,
-  Waves, Shield, Wrench, TrendingDown, Sparkles  // Added Sparkles icon for AI
+  Waves, Shield, Wrench, TrendingDown, Sparkles, FlaskConical,
 } from 'lucide-react'
 import { useAppStore } from '../../store/appStore'
 
@@ -37,9 +37,10 @@ const NAV = [
     ]
   },
   {
-    group: 'AI Assistant',  // NEW GROUP
+    group: 'AI Assistant',
     items: [
-      { to: '/ai',             icon: Sparkles,    label: 'AI Assistant',   sub: 'Natural language queries' },
+      { to: '/ai',             icon: Sparkles,      label: 'AI Assistant',   sub: 'Natural language queries' },
+      { to: '/eval',           icon: FlaskConical,  label: 'AI Evaluation',  sub: 'Benchmark & metrics' },
     ]
   },
   {
