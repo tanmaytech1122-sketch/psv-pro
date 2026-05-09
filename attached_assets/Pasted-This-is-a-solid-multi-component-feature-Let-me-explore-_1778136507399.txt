@@ -1,0 +1,57 @@
+This is a solid multi-component feature. Let me explore the app structure before building anything so I wire it into the right places.
+
+
+6 actions
+Now I have everything I need. Let me create a session plan and build all pieces in parallel.
+
+
+2 actions
+Building all 7 files in parallel — backend evaluator, routes, test cases, and the full frontend dashboard.
+
+
+4 actions
+Now let me wire up the backend route and build the full frontend dashboard in parallel.
+
+
+3 actions
+Now wire up the route in the backend and add the nav link + route in the frontend — all in parallel.
+
+
+8 actions
+Let me verify the backend endpoints work and take a screenshot of the new page simultaneously.
+
+
+4 actions
+Everything is live and working. The dashboard loads cleanly with the empty state. Let me do a quick smoke-test of the full pipeline with 2 cases (one knowledge, one calculation) to verify grading works end-to-end before handing it over.
+
+
+4 actions
+The pipeline is fully verified. Let me take a final screenshot to confirm the dashboard shows the results.
+
+
+2 actions
+The evaluation system is live and fully working. Here's what was built:
+
+What was added across 7 files:
+
+Backend (server/)
+
+data/eval_cases.json — 13 structured test cases: 5 knowledge, 5 calculation, 3 reasoning. Each case has an expected intent, expected tool, required key terms, numeric checks (for calculations), and RAG context requirement.
+
+server/lib/evaluator.js — the grading engine. For each AI response it scores:
+
+Intent accuracy (20 pts)
+Tool selection accuracy (30 pts, calculation cases only)
+Key term coverage in the answer (30 pts)
+RAG context usage (20 pts, knowledge/reasoning only)
+Numeric accuracy within ±5% tolerance (20 pts, when applicable)
+— then detects hallucinations (long answer but no RAG context retrieved) and stores runs to data/eval_results.json.
+server/routes/eval.js — five endpoints: GET /cases, POST /run, GET /status, GET /results, DELETE /results.
+
+Frontend (client/)
+
+client/src/pages/EvalPage.jsx — the full dashboard with: 4 summary metric cards (score, latency, tool accuracy, RAG hit rate), pass/fail/hallucination counts, per-category breakdown, live progress bar during runs, a filterable results table (All / Knowledge / Calculation / Reasoning), and expandable rows showing the full answer, key terms found/missed, hallucination warnings, and RAG sources.
+
+Sidebar + Router — "AI Evaluation" link added under the AI Assistant group, /eval route registered.
+
+How to run a full benchmark: click "Run Benchmark" on the /eval page. With 13 cases at ~4–5s each and the Gemini free tier (5 req/min), a full run takes about 3 minutes. Results persist between runs and the last 10 runs are stored in data/eval_results.json.

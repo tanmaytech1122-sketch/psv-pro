@@ -10,7 +10,8 @@ const { retrieveRelevantChunks, loadDocuments } = require('../lib/rag');
 // Pre-load knowledge base on startup
 loadDocuments();
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL    = 'gemini-2.5-flash';
+const ALLOWED_MODELS  = ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash'];
 
 // ── Training-aware system prompt ─────────────────────────────────
 const SYSTEM_PROMPT = `You are a senior process engineer specialised in Pressure Safety Valve (PSV) and Pressure Relief Valve (PRV) design per API 520, API 521, and API 526.
@@ -89,7 +90,7 @@ function buildSizingCard(toolName, args, result) {
 
 // ── POST /api/ai-chat ─────────────────────────────────────────────
 router.post('/', async (req, res) => {
-  const { messages } = req.body;
+  const { messages, model: modelOverride } = req.body;
 
   if (!messages?.length) {
     return res.status(400).json({ ok: false, error: 'messages array required' });
@@ -100,11 +101,17 @@ router.post('/', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'GEMINI_API_KEY not configured' });
   }
 
+  // Allow eval system to override the model (validated against allowlist)
+  const activeModel = ALLOWED_MODELS.includes(modelOverride) ? modelOverride : GEMINI_MODEL;
+
   const genAI     = new GoogleGenerativeAI(apiKey);
   const userQuery = messages[messages.length - 1]?.content || '';
 
   console.log(`\n=== Agent Request ===`);
   console.log(`Query: ${userQuery.substring(0, 120)}`);
+  if (modelOverride && modelOverride !== GEMINI_MODEL) {
+    console.log(`Model override: ${activeModel}`);
+  }
 
   try {
     // ── RAG retrieval (local TF-IDF, zero API cost) ───────────────
@@ -129,7 +136,7 @@ router.post('/', async (req, res) => {
 
     // ── Single Gemini call: tools + context injected together ─────
     const model = genAI.getGenerativeModel({
-      model: GEMINI_MODEL,
+      model: activeModel,
       tools: [{ functionDeclarations }],
       systemInstruction: systemWithContext,
       toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
@@ -194,6 +201,34 @@ router.post('/', async (req, res) => {
     });
 
   } catch (err) {
+    // ── Detect Gemini 429 / quota errors and surface them cleanly ──
+    const errMsg  = String(err.message || '');
+    const is429   = err.status === 429
+      || errMsg.includes('[429]')
+      || errMsg.includes('429')
+      || /RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(errMsg);
+
+    if (is429) {
+      // Try to parse retryDelay from Gemini error details (e.g. "30s")
+      let retryAfterS = 60;
+      if (Array.isArray(err.errorDetails)) {
+        for (const d of err.errorDetails) {
+          const raw = d?.retryDelay || d?.['@retryDelay'];
+          if (raw) {
+            const m = String(raw).match(/(\d+)/);
+            if (m) { retryAfterS = parseInt(m[1], 10); break; }
+          }
+        }
+      }
+      console.warn(`[ai-chat] Rate limit hit (429) — Retry-After: ${retryAfterS}s`);
+      res.setHeader('Retry-After', String(retryAfterS));
+      return res.status(429).json({
+        ok:             false,
+        error:          'Rate limit exceeded (429)',
+        retry_after_s:  retryAfterS,
+      });
+    }
+
     console.error('Agent error:', err.message);
     return res.status(500).json({ ok: false, error: err.message });
   }
